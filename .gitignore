@@ -1,0 +1,21 @@
+*.aux
+*.glob
+*.vo
+*.vok
+*.vos
+.Makefile.coq.d
+.lia.cache
+.nia.cache
+.nra.cache
+Makefile.coq
+Makefile.coq.conf
+CoqMakefile.conf
+.claude/
+.agents/
+.codex/
+legacy-artifact/
+core_development_notes.md
+rocq_mechanization_from_scratch.md
+
+# Paper PDFs copied in for reference (not part of the artifact)
+paper/

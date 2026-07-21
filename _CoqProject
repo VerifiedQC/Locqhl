@@ -1,0 +1,35 @@
+# Vendored dependency (not rewritten)
+-R third_party/QuantumLib QuantumLib
+
+# New mechanization, written from scratch
+-Q Core Locqhl.Core
+
+# --- QuantumLib (dependency) ---
+third_party/QuantumLib/CauchySchwarz.v
+third_party/QuantumLib/Complex.v
+third_party/QuantumLib/Kronecker.v
+third_party/QuantumLib/Matrix.v
+third_party/QuantumLib/Modulus.v
+third_party/QuantumLib/Pad.v
+third_party/QuantumLib/PermutationAutomation.v
+third_party/QuantumLib/PermutationInstances.v
+third_party/QuantumLib/PermutationsBase.v
+third_party/QuantumLib/Prelim.v
+third_party/QuantumLib/Proportional.v
+third_party/QuantumLib/Quantum.v
+third_party/QuantumLib/RealAux.v
+third_party/QuantumLib/RowColOps.v
+third_party/QuantumLib/Summation.v
+third_party/QuantumLib/VecSet.v
+third_party/QuantumLib/VectorStates.v
+third_party/QuantumLib/Bits.v
+
+# --- Core (new, from scratch) ---
+Core/Names.v
+Core/Syntax.v
+Core/QuantumActions.v
+Core/SemanticDomain.v
+Core/Semantics.v
+Core/Assertions.v
+Core/Rules.v
+Core/WellFormed.v
