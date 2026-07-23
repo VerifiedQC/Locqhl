@@ -80,7 +80,6 @@ Inductive process : Type :=
 
 Definition program : Type := list process.   (* P ::= S_1 ‖ … ‖ S_n *)
 
-
 (** ** Variables of, and substitution into, program expressions ******** *)
 
 Fixpoint expr_vars (e : expr) : list var :=

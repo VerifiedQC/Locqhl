@@ -23,6 +23,13 @@ third_party/QuantumLib/Summation.v
 third_party/QuantumLib/VecSet.v
 third_party/QuantumLib/VectorStates.v
 third_party/QuantumLib/Bits.v
+third_party/QuantumLib/PermutationMatrices.v
+third_party/QuantumLib/Permutations.v
+third_party/QuantumLib/Polynomial.v
+third_party/QuantumLib/Ctopology.v
+third_party/QuantumLib/Polar.v
+third_party/QuantumLib/FTA.v
+third_party/QuantumLib/Eigenvectors.v
 
 # --- Core (new, from scratch) ---
 Core/Names.v
@@ -31,5 +38,7 @@ Core/QuantumActions.v
 Core/SemanticDomain.v
 Core/Semantics.v
 Core/Assertions.v
+Core/TraceFacts.v
 Core/Rules.v
 Core/WellFormed.v
+Core/Soundness.v

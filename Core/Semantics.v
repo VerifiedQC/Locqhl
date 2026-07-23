@@ -11,7 +11,7 @@ Import ListNotations.
     The paper interprets the symbol alphabets by a fixed classical structure
     (function/relation symbols) and a fixed quantum structure (unitary and
     measurement symbols).  We bundle all four into one record [interp], so a
-    step judgment reads  [Σ ⊢ (L, E) →ₗ G]  — a relation "against Σ".
+    step judgment reads  [Σ ⊳ (L, E) →ₗ G]  — a relation "against Σ".
 *********************************************************************)
 Record interp (dim : nat) := {
   i_fn : funsym -> list val -> val;
@@ -44,42 +44,42 @@ Definition advance (R : residual) (K : cblock) (S : process) : process :=
   | _     , _      => phase R K S
   end.
 
-Reserved Notation "Σ '⊢' '‹' L ',' E '›' '→ₗ' G"
+Reserved Notation "Σ '⊳' '‹' L ',' E '›' '→ₗ' G"
   (at level 70, L at level 99, E at level 99).
-Reserved Notation "Σ '⊢' '‹' D ',' E '›' '⇝' G"
+Reserved Notation "Σ '⊳' '‹' D ',' E '›' '⇝' G"
   (at level 70, D at level 99, E at level 99).
 
 (** ** Local step  ** **)
 Inductive local_step {dim} (Σ : interp dim)
     : lblock -> ensemble dim -> local_config dim -> Prop :=
 | local_step_skip : forall E,
-    Σ ⊢ ‹ <{ skip }>, E › →ₗ {|| ↓, E ||}
+    Σ ⊳ ‹ <{ skip }>, E › →ₗ {|| ↓, E ||}
 | local_step_assign : forall x e E,
-    Σ ⊢ ‹ <{ x := e }>, E › →ₗ
+    Σ ⊳ ‹ <{ x := e }>, E › →ₗ
       {|| ↓, map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E ||}
 | local_step_init : forall q E,
-    Σ ⊢ ‹ <{ init q }>, E › →ₗ
+    Σ ⊳ ‹ <{ init q }>, E › →ₗ
       {|| ↓, map (fun '(s,r) => (s, apply_init q r)) E ||}
 | local_step_ugate : forall U qs E,
-    Σ ⊢ ‹ <{ U @ qs }>, E › →ₗ
+    Σ ⊳ ‹ <{ U @ qs }>, E › →ₗ
       {|| ↓, map (fun '(s,r) => (s, apply_unitary (i_uu Σ U qs) r)) E ||}
 | local_step_meas : forall x M qs E,
-    Σ ⊢ ‹ <{ x <- M @ qs }>, E › →ₗ
+    Σ ⊳ ‹ <{ x <- M @ qs }>, E › →ₗ
       {|| ↓, flat_map (fun '(s,r) =>
               map (fun m => (s [ x |-> m ], apply_meas (i_mm Σ M qs) m r))
                   (fst (i_mm Σ M qs))) E ||}
 | local_step_seq : forall L1 L2 E G,
-    Σ ⊢ ‹ L1, E › →ₗ G ->
-    Σ ⊢ ‹ <{ L1 ; L2 }>, E › →ₗ
+    Σ ⊳ ‹ L1, E › →ₗ G ->
+    Σ ⊳ ‹ <{ L1 ; L2 }>, E › →ₗ
       map (fun c => match fst c with
                     | r_done     => (r_more L2, snd c)
                     | r_more L1' => (r_more <{ L1' ; L2 }>, snd c)
                     end) G
 | local_step_if : forall b L1 L0 E,
-    Σ ⊢ ‹ <{ if b then L1 else L0 }>, E › →ₗ
+    Σ ⊳ ‹ <{ if b then L1 else L0 }>, E › →ₗ
         {|| r_more L1, ensemble_filter (fun s => eval_bool (i_fn Σ) (i_rl Σ) s b) E ||}
       ⊎ {|| r_more L0, ensemble_filter (fun s => negb (eval_bool (i_fn Σ) (i_rl Σ) s b)) E ||}
-where "Σ '⊢' '‹' L ',' E '›' '→ₗ' G" := (local_step Σ L E G).
+where "Σ '⊳' '‹' L ',' E '›' '→ₗ' G" := (local_step Σ L E G).
 
 (** ** Distributed step  ** **)
 Inductive distri_step {dim} (Σ : interp dim)
@@ -87,8 +87,8 @@ Inductive distri_step {dim} (Σ : interp dim)
 (* (Local) *)
 | distri_local : forall (l1 : program) (L : lblock) (K : cblock) (S : process)
                         (l2 : program) (E : ensemble dim) (Gl : local_config dim),
-    Σ ⊢ ‹ L, E › →ₗ Gl ->
-    Σ ⊢ ‹ l1 ‖ (L ⨾ K ⨾ S) ‖ l2, E › ⇝
+    Σ ⊳ ‹ L, E › →ₗ Gl ->
+    Σ ⊳ ‹ l1 ‖ (L ⨾ K ⨾ S) ‖ l2, E › ⇝
       map (fun c => (l1 ‖ advance (fst c) K S ‖ l2, snd c)) Gl
 (* (Communicate) *)
 | distri_comm : forall (D : program) (Ks : cblock) (S : process) (Ks' : cblock)
@@ -97,20 +97,23 @@ Inductive distri_step {dim} (Σ : interp dim)
     Permutation D (phase ↓ Ks S :: phase ↓ Kr T :: rest) ->
     Ks ∋ c_send c e □ Ks' ->
     Kr ∋ c_recv c x □ Kr' ->
-    Σ ⊢ ‹ D, E › ⇝
+    Σ ⊳ ‹ D, E › ⇝
       {|| advance ↓ Ks' S :: advance ↓ Kr' T :: rest,
         map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E ||}
-where "Σ '⊢' '‹' D ',' E '›' '⇝' G" := (distri_step Σ D E G).
+where "Σ '⊳' '‹' D ',' E '›' '⇝' G" := (distri_step Σ D E G).
 
 
-(** One step of a whole mixed configuration: pick ANY component, step it with
-    [distri_step], splice the resulting components back in, renormalise. **)
+(** One step of a whole mixed configuration: pick ANY component — the paper's
+    ⊎ is an unordered multiset union, hence the [Permutation] premise (same
+    device as [distri_comm]) — step it with [distri_step], put the resulting
+    components back, renormalise:  (D,E) ⊎ G₀ ⇝ norm(G₁ ⊎ G₀). **)
 Inductive mixed_step {dim} (Σ : interp dim)
     : distri_config dim -> distri_config dim -> Prop :=
-| mixed_lift : forall (Ga : distri_config dim) (D : program) (E : ensemble dim)
-                      (Gb : distri_config dim) (G1 : distri_config dim),
-    Σ ⊢ ‹ D, E › ⇝ G1 ->
-    mixed_step Σ (Ga ‖ (D, E) ‖ Gb) (norm (G1 ⊎ Ga ⊎ Gb)).
+| mixed_lift : forall (G : distri_config dim) (D : program) (E : ensemble dim)
+                      (G0 : distri_config dim) (G1 : distri_config dim),
+    Permutation G ((D, E) :: G0) ->
+    Σ ⊳ ‹ D, E › ⇝ G1 ->
+    mixed_step Σ G (norm (G1 ⊎ G0)).
 
 (** Reflexive–transitive closure:  ⇝*  **)
 Inductive step_star {dim} (Σ : interp dim)

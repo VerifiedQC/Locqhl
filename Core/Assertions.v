@@ -145,12 +145,14 @@ Definition defined_in {dim} (Σ : interp dim) (Q : assertion dim) (s : store) : 
   exists M, qpred_denote Σ s (quantum_part Q) = Some M.
 
 (** ** Löwner order and effects ************************************** *)
-
 Definition lowner {n} (M N : Square n) : Prop :=
   positive_semidefinite (N .+ (- C1) .* M)%M.
 
 Notation "M ⊑ N" := (lowner M N) (at level 70).
 
+(** Quantum.v 1621
+Definition positive_semidefinite {n} (A : Square n) : Prop :=
+  forall (z : Vector n), WF_Matrix z -> fst ((z† × A × z) O O) >= 0.  **)
 Definition is_effect {dim} (M : Square (2 ^ dim)) : Prop :=
   positive_semidefinite M /\ M ⊑ I (2 ^ dim).
 
@@ -184,11 +186,17 @@ Definition entails {dim} (Σ : interp dim) (Q1 Q2 : assertion dim) : Prop :=
         qpred_denote Σ s (quantum_part Q1) = Some M ->
         qpred_denote Σ s (quantum_part Q2) = Some N -> M ⊑ N).
 
-(** ** Validity of a correctness formula ***************************** *)
+(** Paper form (φ,A) ⊨ (ψ,B), with the ambient structure Σ subscripted. **)
+Notation "Q '⊨[' Σ ']' R" := (entails Σ Q R)
+  (at level 70, Σ at level 99, R at level 69, format "Q  ⊨[ Σ ]  R").
 
+(** ** Validity of a correctness formula ***************************** *)
 Definition valid {dim} (Σ : interp dim)
                  (Pre : assertion dim) (P : program) (Post : assertion dim) : Prop :=
   forall (s : store) (r : qstate dim),
+    @WF_Matrix (2 ^ dim) (2 ^ dim) r ->
+    @hermitian (2 ^ dim) r ->
+    @positive_semidefinite (2 ^ dim) r ->
     formula_holds Σ s (classical_part Pre) = true ->
     defined_in Σ Pre s ->
     forall E, Term Σ P (s, r) E ->
