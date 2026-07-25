@@ -7,7 +7,6 @@
 
 From Stdlib Require Import Lists.List.
 From Stdlib Require Import Arith.PeanoNat.
-From Stdlib Require Import Sorting.Permutation.
 From QuantumLib Require Import Matrix Quantum.
 From Locqhl.Core Require Import Syntax QuantumActions SemanticDomain Semantics Assertions WellFormed.
 Import ListNotations.
@@ -98,33 +97,37 @@ Inductive local_derivable {dim} (Σ : interp dim)
 where "Σ '⊢ₗ' '{{' Pre '}}' L '{{' Post '}}'" := (local_derivable Σ Pre L Post).
 
 
-(** ** Encoding the phrase shapes of the distributed rules *************
+(** ** Row shapes of the distributed rules ****************************
 
-      D_1‖…‖D_N   N communication-free local blocks   [par_local]
-      K_1‖…‖K_N   one communication phase             [par_comm]
-      T_1‖…‖T_N   N tails                             already a [program]
-      (D_i;K_i;T_i)‖…                                  [par_phases]
-      D_1;…;D_N   their sequential composition        [seq_all] (an lblock)
+      D₁‖…‖D_N      locals_seq   (with its left-to-right sequentialisation)
+      ε_K‖…‖ε_K     all_comm_done
+      (Dᵢ;Kᵢ;Tᵢ)‖…  zip3 of the D-, K- and T-rows
 *********************************************************************)
 
-Definition par_local (Ds : list lblock) : program :=
-  map (fun D => phase (r_more D) ([]) terminated) Ds.
+Inductive locals_seq : program -> lblock -> Prop :=
+| lsq_leaf : forall D, locals_seq (⟨ₗ D ⟩) D
+| lsq_par  : forall P1 P2 D1 D2,
+    locals_seq P1 D1 ->
+    locals_seq P2 D2 ->
+    locals_seq (pg_par P1 P2) (l_seq D1 D2).
 
-Definition par_comm (Ks : list cblock) : program :=
-  map (fun K => phase r_done K terminated) Ks.
+Inductive all_comm_done : program -> Prop :=
+| acd_leaf : all_comm_done (⟨ₖ [] ⟩)
+| acd_par  : forall P1 P2,
+    all_comm_done P1 ->
+    all_comm_done P2 ->
+    all_comm_done (pg_par P1 P2).
 
-Fixpoint seq_all (Ds : list lblock) : lblock :=
-  match Ds with
-  | []       => l_skip
-  | D :: Ds' => l_seq D (seq_all Ds')
-  end.
-
-Fixpoint par_phases (Ds : list lblock) (Ks : list cblock) (Ts : list process)
-  : program :=
-  match Ds, Ks, Ts with
-  | D :: Ds', K :: Ks', T :: Ts' => phase (r_more D) K T :: par_phases Ds' Ks' Ts'
-  | _, _, _ => []
-  end.
+(** The D-, K- and T-rows have the same tree shape and zip leafwise into
+    the program of phases. **)
+Inductive zip3 : program -> program -> program -> program -> Prop :=
+| zip3_leaf : forall D K T,
+    zip3 (⟨ₗ D ⟩) (⟨ₖ K ⟩) (⟨ₛ T ⟩)
+         (pg_comp (comp_proc (phase (r_more D) K T)))
+| zip3_par : forall d1 d2 k1 k2 t1 t2 z1 z2,
+    zip3 d1 k1 t1 z1 ->
+    zip3 d2 k2 t2 z2 ->
+    zip3 (pg_par d1 d2) (pg_par k1 k2) (pg_par t1 t2) (pg_par z1 z2).
 
 (** ** Helpers for Branch-Accum *************************************** *)
 
@@ -151,28 +154,34 @@ Reserved Notation "Σ '⊢ₚ' '{{' Pre '}}' P '{{' Post '}}'"
 
 Inductive derivable {dim} (Σ : interp dim)
     : assertion dim -> program -> assertion dim -> Prop :=
-(* Par-Disjoint-MP. *)
-| rule_par_disjoint : forall Q R Ds,
-    local_derivable Σ Q (seq_all Ds) R ->
-    Σ ⊢ₚ {{ Q }} (par_local Ds) {{ R }}
-(* Comm-Done.*)
-| rule_comm_done : forall Q Ks,
-    Forall (fun K => K = []) Ks ->
-    Σ ⊢ₚ {{ Q }} (par_comm Ks) {{ Q }}
-(* Comm-Select-MP. *)
-| rule_comm_select : forall Q R Ks Ki Ki' Kj Kj' rest c e x,
-    Permutation Ks (Ki :: Kj :: rest) ->
+(* Par-Disjoint-MP.  DisjMP is not a premise: well-formedness supplies it
+   (Theorem 2.1). *)
+| rule_par_disjoint : forall Q R PD Dseq,
+    locals_seq PD Dseq ->
+    Σ ⊢ₗ {{ Q }} Dseq {{ R }} ->
+    Σ ⊢ₚ {{ Q }} PD {{ R }}
+(* Comm-Done. *)
+| rule_comm_done : forall Q PK,
+    all_comm_done PK ->
+    Σ ⊢ₚ {{ Q }} PK {{ Q }}
+(* Comm-Select-MP: consume one matched endpoint from the sender leaf and
+   the receiver leaf, in place. *)
+| rule_comm_select : forall Q R PK P1 PK' Ki Ki' Kj Kj' c e x,
+    replace_leaf (comp_comm Ki) (comp_comm Ki') PK P1 ->
+    replace_leaf (comp_comm Kj) (comp_comm Kj') P1 PK' ->
     selects Ki (c_send c e) Ki' ->
     selects Kj (c_recv c x) Kj' ->
-    Σ ⊢ₚ {{ Q }} (par_comm (Ki' :: Kj' :: rest)) {{ R }} ->
-    Σ ⊢ₚ {{ assertion_subst Q x e }} (par_comm Ks) {{ R }}
-(* Par-Comp-MP. *)
-| rule_par_comp : forall Q0 Q1 Q2 Q3 Ds Ks Ts,
-    length Ds = length Ks -> length Ks = length Ts ->
-    Σ ⊢ₚ {{ Q0 }} (par_local Ds) {{ Q1 }} ->
-    Σ ⊢ₚ {{ Q1 }} (par_comm Ks)  {{ Q2 }} ->
-    Σ ⊢ₚ {{ Q2 }} Ts             {{ Q3 }} ->
-    Σ ⊢ₚ {{ Q0 }} (par_phases Ds Ks Ts) {{ Q3 }}
+    Σ ⊢ₚ {{ Q }} PK' {{ R }} ->
+    Σ ⊢ₚ {{ assertion_subst Q x e }} PK {{ R }}
+(* Par-Comp-MP.  [wf_program] is the paper's "rule instances range over
+   well-formed core programs" (p.13). *)
+| rule_par_comp : forall Q0 Q1 Q2 Q3 PD PK PT P,
+    zip3 PD PK PT P ->
+    wf_program P ->
+    Σ ⊢ₚ {{ Q0 }} PD {{ Q1 }} ->
+    Σ ⊢ₚ {{ Q1 }} PK {{ Q2 }} ->
+    Σ ⊢ₚ {{ Q2 }} PT {{ Q3 }} ->
+    Σ ⊢ₚ {{ Q0 }} P {{ Q3 }}
 (* Branch-Accum. *)
 | rule_branch_accum : forall phi B P A0 psi0 fam,
     Σ ⊢ₚ {{ mk_assertion phi A0 }} P {{ mk_assertion psi0 B }} ->

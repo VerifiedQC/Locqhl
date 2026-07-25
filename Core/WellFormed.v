@@ -98,17 +98,40 @@ Fixpoint process_chan (p : process) : list chan :=
 Definition process_cvar (p : process) : list var :=
   process_change p ++ process_read p.
 
-Definition program_change (P : program) : list var := flat_map process_change P.
-Definition program_read   (P : program) : list var := flat_map process_read P.
-Definition program_cvar   (P : program) : list var := flat_map process_cvar P.
-Definition program_qvar   (P : program) : list qvar := flat_map process_qvar P.
-Definition program_chan   (P : program) : list chan := flat_map process_chan P.
+(** ** Footprints of a component, through its reading. ** **)
+Definition comp_change (C : component) : list var  := process_change (read_component C).
+Definition comp_cvar   (C : component) : list var  := process_cvar   (read_component C).
+Definition comp_qvar   (C : component) : list qvar := process_qvar   (read_component C).
+Definition comp_chan   (C : component) : list chan := process_chan   (read_component C).
 
-(** parties_P(c) — the indices of the processes mentioning channel c. **)
-Definition parties (P : program) (c : chan) : list nat :=
-  filter (fun i => existsb (Nat.eqb c)
-                     (process_chan (nth i P terminated)))
-         (seq 0 (length P)).
+(** ** Footprints of a program ** **)
+Fixpoint program_change (P : program) : list var :=
+  match P with
+  | pg_comp C    => comp_change C
+  | pg_par P1 P2 => program_change P1 ++ program_change P2
+  end.
+Fixpoint program_cvar (P : program) : list var :=
+  match P with
+  | pg_comp C    => comp_cvar C
+  | pg_par P1 P2 => program_cvar P1 ++ program_cvar P2
+  end.
+Fixpoint program_qvar (P : program) : list qvar :=
+  match P with
+  | pg_comp C    => comp_qvar C
+  | pg_par P1 P2 => program_qvar P1 ++ program_qvar P2
+  end.
+Fixpoint program_chan (P : program) : list chan :=
+  match P with
+  | pg_comp C    => comp_chan C
+  | pg_par P1 P2 => program_chan P1 ++ program_chan P2
+  end.
+
+(** |parties_P(c)| — how many leaves mention channel c. **)
+Fixpoint parties (P : program) (c : chan) : nat :=
+  match P with
+  | pg_comp C    => if existsb (Nat.eqb c) (comp_chan C) then 1 else 0
+  | pg_par P1 P2 => parties P1 c + parties P2 c
+  end.
 
 (** ** DisjMP — disjoint footprints of communication-free local blocks **)
 (** The pairwise non-interference condition on two local blocks. It is
@@ -125,18 +148,17 @@ Definition DisjMP (Ds : list lblock) : Prop :=
 
 (** ** Well-formedness of a distributed program ********************** *)
 
-(** Ownership: no process writes another's classical state, and quantum
-    registers are privately owned. **)
-(** Two processes own disjoint state: neither writes anything the other
-    touches, and their quantum registers are disjoint.  Symmetric, so
-    ordered pairs suffice. **)
-Definition owns_disjointly (p q : process) : Prop :=
-  disjoint (process_change p) (process_cvar q)
-  /\ disjoint (process_change q) (process_cvar p)
-  /\ disjoint (process_qvar p) (process_qvar q).
+(** Ownership: at every ∥ node the two subtrees own disjoint state. **)
+Definition cross_disjoint (P1 P2 : program) : Prop :=
+  disjoint (program_change P1) (program_cvar P2)
+  /\ disjoint (program_change P2) (program_cvar P1)
+  /\ disjoint (program_qvar P1) (program_qvar P2).
 
-Definition wf_ownership (P : program) : Prop :=
-  ForallOrdPairs owns_disjointly P.
+Fixpoint wf_ownership (P : program) : Prop :=
+  match P with
+  | pg_comp _    => True
+  | pg_par P1 P2 => wf_ownership P1 /\ wf_ownership P2 /\ cross_disjoint P1 P2
+  end.
 
 (** The k-th communication block of a process; processes with fewer phases
     are padded with ε_K, which is exactly the paper's padding convention. **)
@@ -147,26 +169,37 @@ Fixpoint comm_at (p : process) (k : nat) : cblock :=
   | phase _ _ p',  S k' => comm_at p' k'
   end.
 
-(** The k-th communication PHASE of a program: K_1 ‖ … ‖ K_N, padded. **)
-Definition phase_at (P : program) (k : nat) : list cblock :=
-  map (fun p => comm_at p k) P.
+(** The k-th communication PHASE of a program: the k-th block of every
+    leaf, padded. **)
+Fixpoint phase_at (P : program) (k : nat) : list cblock :=
+  match P with
+  | pg_comp C    => [comm_at (read_component C) k]
+  | pg_par P1 P2 => phase_at P1 k ++ phase_at P2 k
+  end.
+
+(** All communication actions of a process / of a program. **)
+Fixpoint process_actions (p : process) : list caction :=
+  match p with
+  | terminated   => []
+  | phase _ K p' => K ++ process_actions p'
+  end.
+
+Fixpoint program_actions (P : program) : list caction :=
+  match P with
+  | pg_comp C    => process_actions (read_component C)
+  | pg_par P1 P2 => program_actions P1 ++ program_actions P2
+  end.
 
 (** Logical channels: every channel carries exactly one output and one
-    input endpoint, and they sit in two distinct processes. **)
+    input endpoint, in two distinct leaves. **)
 Definition endpoints_of (P : program) (c : chan) : list caction :=
-  filter (fun a => Nat.eqb (caction_chan a) c)
-         (flat_map (fun p =>
-            (fix all (q : process) : list caction :=
-               match q with
-               | terminated    => []
-               | phase _ K q'  => K ++ all q'
-               end) p) P).
+  filter (fun a => Nat.eqb (caction_chan a) c) (program_actions P).
 
 Definition wf_channels (P : program) : Prop :=
   forall c, In c (program_chan P) ->
     length (filter is_send (endpoints_of P c)) = 1
     /\ length (filter (fun a => negb (is_send a)) (endpoints_of P c)) = 1
-    /\ length (parties P c) = 2.
+    /\ parties P c = 2.
 
 (** Same-phase communication independence: within one padded phase the
     receive targets are pairwise distinct and none of them is read by an

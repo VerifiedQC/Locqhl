@@ -83,10 +83,9 @@ Definition eval_bool (fn : funsym -> list val -> val)
     than in Semantics.v.
 *********************************************************************)
 
-(** A mixed configuration is terminal when every component's program is
-    finished, i.e. every one of its processes has [terminated].  **)
+(** A mixed configuration is terminal when every program has terminated. **)
 Definition terminal {dim} (G : distri_config dim) : Prop :=
-  Forall (fun c => Forall (fun S => S = terminated) (fst c)) G.
+  Forall (fun c => prog_terminated (fst c)) G.
 
 (** Terminal collapse:  coll(⊎_r (↓, E_r)) ≜ ⊎_r E_r. **)
 Definition collapse {dim} (G : distri_config dim) : ensemble dim :=
