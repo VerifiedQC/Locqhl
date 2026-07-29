@@ -215,3 +215,170 @@ Definition wf_phase_independence (P : program) : Prop :=
 (** A well-formed LOCC distributed program. **)
 Definition wf_program (P : program) : Prop :=
   wf_ownership P /\ wf_channels P /\ wf_phase_independence P.
+
+(** ** Theorem 2.1 — well-formedness implies disjoint local footprints ***
+
+    The paper cuts one communication-free local block Dᵢ out of each process
+    Sᵢ — the padded case being skip — and claims DisjMP({Dᵢ}).  An [lblock]
+    holds no endpoints by construction, so only "occurring in Sᵢ" is left to
+    state. **)
+
+(** D is the local block of one of p's phases. **)
+Fixpoint block_in (D : lblock) (p : process) : Prop :=
+  match p with
+  | terminated   => False
+  | phase R _ p' => R = r_more D \/ block_in D p'
+  end.
+
+(** What one leaf may contribute to the row: a block of its own, or skip. **)
+Definition leaf_block (C : component) (D : lblock) : Prop :=
+  D = l_skip \/ block_in D (read_component C).
+
+(** [local_row P Ds]: Ds is one such block per leaf, left to right — the
+    D-row of Par-Comp-MP.  A leaf [⟨ₗ D ⟩] reads as [phase (r_more D) ε ↓],
+    so a whole D-row program is an instance. **)
+Inductive local_row : program -> list lblock -> Prop :=
+| lrow_leaf : forall C D,
+    leaf_block C D ->
+    local_row (pg_comp C) [D]
+| lrow_par : forall P1 P2 Ds1 Ds2,
+    local_row P1 Ds1 ->
+    local_row P2 Ds2 ->
+    local_row (pg_par P1 P2) (Ds1 ++ Ds2).
+
+(** Footprint monotonicity: a phase's block touches only what its process
+    touches. **)
+Lemma block_in_change : forall D p,
+    block_in D p -> incl (lblock_change D) (process_change p).
+Proof.
+  intros D p; induction p as [| R K p' IH]; simpl.
+  - intros [].
+  - intros [Heq | Hin].
+    + subst R; simpl; apply incl_appl, incl_refl.
+    + eapply incl_tran; [ apply IH, Hin | apply incl_appr, incl_appr, incl_refl ].
+Qed.
+
+Lemma block_in_read : forall D p,
+    block_in D p -> incl (lblock_read D) (process_read p).
+Proof.
+  intros D p; induction p as [| R K p' IH]; simpl.
+  - intros [].
+  - intros [Heq | Hin].
+    + subst R; simpl; apply incl_appl, incl_refl.
+    + eapply incl_tran; [ apply IH, Hin | apply incl_appr, incl_appr, incl_refl ].
+Qed.
+
+Lemma block_in_qvar : forall D p,
+    block_in D p -> incl (lblock_qvar D) (process_qvar p).
+Proof.
+  intros D p; induction p as [| R K p' IH]; simpl.
+  - intros [].
+  - intros [Heq | Hin].
+    + subst R; simpl; apply incl_appl, incl_refl.
+    + eapply incl_tran; [ apply IH, Hin | apply incl_appr, incl_refl ].
+Qed.
+
+Lemma program_change_cvar : forall P, incl (program_change P) (program_cvar P).
+Proof.
+  induction P as [C | P1 IH1 P2 IH2]; simpl.
+  - unfold comp_change, comp_cvar, process_cvar. apply incl_appl, incl_refl.
+  - apply incl_app; [ apply incl_appl, IH1 | apply incl_appr, IH2 ].
+Qed.
+
+(** …and hence a whole row: every block in it is bounded by its program. **)
+Lemma local_row_change : forall P Ds,
+    local_row P Ds -> forall D, In D Ds -> incl (lblock_change D) (program_change P).
+Proof.
+  induction 1 as [C D0 Hleaf | P1 P2 Ds1 Ds2 H1 IH1 H2 IH2]; intros D HIn.
+  - destruct HIn as [Heq | []]; subst D0.
+    destruct Hleaf as [Hskip | Hb].
+    + subst D; apply incl_nil_l.
+    + unfold program_change, comp_change; apply block_in_change, Hb.
+  - simpl; apply in_app_or in HIn as [HIn | HIn].
+    + apply incl_appl, IH1, HIn.
+    + apply incl_appr, IH2, HIn.
+Qed.
+
+Lemma local_row_read : forall P Ds,
+    local_row P Ds -> forall D, In D Ds -> incl (lblock_read D) (program_cvar P).
+Proof.
+  induction 1 as [C D0 Hleaf | P1 P2 Ds1 Ds2 H1 IH1 H2 IH2]; intros D HIn.
+  - destruct HIn as [Heq | []]; subst D0.
+    destruct Hleaf as [Hskip | Hb].
+    + subst D; apply incl_nil_l.
+    + unfold program_cvar, comp_cvar, process_cvar.
+      apply incl_appr, block_in_read, Hb.
+  - simpl; apply in_app_or in HIn as [HIn | HIn].
+    + apply incl_appl, IH1, HIn.
+    + apply incl_appr, IH2, HIn.
+Qed.
+
+Lemma local_row_qvar : forall P Ds,
+    local_row P Ds -> forall D, In D Ds -> incl (lblock_qvar D) (program_qvar P).
+Proof.
+  induction 1 as [C D0 Hleaf | P1 P2 Ds1 Ds2 H1 IH1 H2 IH2]; intros D HIn.
+  - destruct HIn as [Heq | []]; subst D0.
+    destruct Hleaf as [Hskip | Hb].
+    + subst D; apply incl_nil_l.
+    + unfold program_qvar, comp_qvar; apply block_in_qvar, Hb.
+  - simpl; apply in_app_or in HIn as [HIn | HIn].
+    + apply incl_appl, IH1, HIn.
+    + apply incl_appr, IH2, HIn.
+Qed.
+
+(** Two list-level steps: [disjoint] is inherited by sublists, and pairing up
+    an append needs the within-halves and across-halves facts. **)
+Lemma disjoint_incl : forall a b A B,
+    disjoint A B -> incl a A -> incl b B -> disjoint a b.
+Proof. intros a b A B H Ha Hb x Hx Hy. exact (H x (Ha x Hx) (Hb x Hy)). Qed.
+
+Lemma ForallOrdPairs_app : forall {A} (R : A -> A -> Prop) l1 l2,
+    ForallOrdPairs R l1 -> ForallOrdPairs R l2 ->
+    (forall x y, In x l1 -> In y l2 -> R x y) ->
+    ForallOrdPairs R (l1 ++ l2).
+Proof.
+  intros A R l1; induction l1 as [| a l1 IH]; intros l2 H1 H2 Hcross; simpl.
+  - assumption.
+  - inversion H1 as [| ? ? Hhd Htl]; subst; constructor.
+    + apply Forall_app; split; [ assumption |].
+      apply Forall_forall; intros y Hy; apply Hcross; [ left; reflexivity | assumption ].
+    + apply IH; [ assumption | assumption |].
+      intros x y Hx Hy; apply Hcross; [ right; assumption | assumption ].
+Qed.
+
+(** Theorem 2.1.  The induction runs on ownership alone: [wf_channels] is
+    NOT inherited by a subtree (a channel's two endpoints straddle the ∥),
+    so it cannot appear in the induction hypothesis. **)
+Lemma wf_ownership_disj_footprints : forall (P : program) (Ds : list lblock),
+    wf_ownership P -> local_row P Ds -> DisjMP Ds.
+Proof.
+  intros P Ds Hown Hrow; revert Hown.
+  induction Hrow as [C D0 Hleaf | P1 P2 Ds1 Ds2 H1 IH1 H2 IH2]; intros Hown.
+  - repeat constructor.
+  - destruct Hown as (Ho1 & Ho2 & Hc12 & Hc21 & Hq).
+    apply ForallOrdPairs_app; [ apply IH1, Ho1 | apply IH2, Ho2 |].
+    intros Di Dj HDi HDj; repeat split.
+    + eapply disjoint_incl;
+        [ exact Hc12
+        | eapply local_row_change; eassumption
+        | eapply incl_tran;
+            [ eapply local_row_change; eassumption | apply program_change_cvar ] ].
+    + eapply disjoint_incl;
+        [ exact Hc12
+        | eapply local_row_change; eassumption
+        | eapply local_row_read; eassumption ].
+    + eapply disjoint_incl;
+        [ exact Hc21
+        | eapply local_row_change; eassumption
+        | eapply local_row_read; eassumption ].
+    + eapply disjoint_incl;
+        [ exact Hq
+        | eapply local_row_qvar; eassumption
+        | eapply local_row_qvar; eassumption ].
+Qed.
+
+Theorem wf_disj_footprints : forall (P : program) (Ds : list lblock),
+    wf_program P -> local_row P Ds -> DisjMP Ds.
+Proof.
+  intros P Ds (Hown & _ & _). apply wf_ownership_disj_footprints, Hown.
+Qed.
