@@ -28,9 +28,6 @@ Definition selects (K : cblock) (a : caction) (K' : cblock) : Prop :=
 Notation "K '∋' a '□' K'" := (selects K a K')
   (at level 70, a at level 60).
 
-(** Parallel context:  l1 ‖ p ‖ l2   **)
-Notation "l1 '‖' p '‖' l2" := (l1 ++ p :: l2)
-  (at level 62, p at level 61, right associativity).
 
 (** Rebuild a process from its head phase after a step, applying BOTH
     structural erasures of the paper at once:
@@ -81,32 +78,62 @@ Inductive local_step {dim} (Σ : interp dim)
       ⊎ {|| r_more L0, ensemble_filter (fun s => negb (eval_bool (i_fn Σ) (i_rl Σ) s b)) E ||}
 where "Σ '⊳' '‹' L ',' E '›' '→ₗ' G" := (local_step Σ L E G).
 
-(** ** Distributed step  ** **)
+(** ** Distributed step (Fig. 2(b)).
+      ds_local       one local ensemble step at a leaf (via its reading)
+      ds_par_l/r     the step happens inside one subtree
+      ds_comm_lr/rl  one atomic rendezvous; the sender and receiver leaves
+                     are located by [replace_leaf] in the two subtrees of
+                     their least common ∥ node **)
 Inductive distri_step {dim} (Σ : interp dim)
     : program -> ensemble dim -> distri_config dim -> Prop :=
-(* (Local) *)
-| distri_local : forall (l1 : program) (L : lblock) (K : cblock) (S : process)
-                        (l2 : program) (E : ensemble dim) (Gl : local_config dim),
+(* (Local) at a leaf *)
+| ds_local : forall (C : component) (L : lblock) (K : cblock) (S : process)
+                    (E : ensemble dim) (Gl : local_config dim),
+    read_component C = phase (r_more L) K S ->
     Σ ⊳ ‹ L, E › →ₗ Gl ->
-    Σ ⊳ ‹ l1 ‖ (L ⨾ K ⨾ S) ‖ l2, E › ⇝
-      map (fun c => (l1 ‖ advance (fst c) K S ‖ l2, snd c)) Gl
-(* (Communicate) *)
-| distri_comm : forall (D : program) (Ks : cblock) (S : process) (Ks' : cblock)
-                       (Kr : cblock) (T : process) (Kr' : cblock) (rest : program)
-                       (c : chan) (e : expr) (x : var) (E : ensemble dim),
-    Permutation D (phase ↓ Ks S :: phase ↓ Kr T :: rest) ->
+    Σ ⊳ ‹ pg_comp C, E › ⇝
+      map (fun c => (pg_comp (comp_proc (advance (fst c) K S)), snd c)) Gl
+(* the step happens in the left / right subtree *)
+| ds_par_l : forall (P1 P2 : program) (E : ensemble dim) (G1 : distri_config dim),
+    Σ ⊳ ‹ P1, E › ⇝ G1 ->
+    Σ ⊳ ‹ pg_par P1 P2, E › ⇝
+      map (fun c => (pg_par (fst c) P2, snd c)) G1
+| ds_par_r : forall (P1 P2 : program) (E : ensemble dim) (G2 : distri_config dim),
+    Σ ⊳ ‹ P2, E › ⇝ G2 ->
+    Σ ⊳ ‹ pg_par P1 P2, E › ⇝
+      map (fun c => (pg_par P1 (fst c), snd c)) G2
+(* (Communicate): sender leaf in the left subtree, receiver in the right *)
+| ds_comm_lr : forall (P1 P1' P2 P2' : program) (Cs Cr : component)
+                      (Ks Ks' Kr Kr' : cblock) (Ss Sr : process)
+                      (c : chan) (e : expr) (x : var) (E : ensemble dim),
+    read_component Cs = phase ↓ Ks Ss ->
+    read_component Cr = phase ↓ Kr Sr ->
     Ks ∋ c_send c e □ Ks' ->
     Kr ∋ c_recv c x □ Kr' ->
-    Σ ⊳ ‹ D, E › ⇝
-      {|| advance ↓ Ks' S :: advance ↓ Kr' T :: rest,
+    replace_leaf Cs (comp_proc (advance ↓ Ks' Ss)) P1 P1' ->
+    replace_leaf Cr (comp_proc (advance ↓ Kr' Sr)) P2 P2' ->
+    Σ ⊳ ‹ pg_par P1 P2, E › ⇝
+      {|| pg_par P1' P2',
+        map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E ||}
+(* (Communicate): sender leaf in the right subtree, receiver in the left *)
+| ds_comm_rl : forall (P1 P1' P2 P2' : program) (Cs Cr : component)
+                      (Ks Ks' Kr Kr' : cblock) (Ss Sr : process)
+                      (c : chan) (e : expr) (x : var) (E : ensemble dim),
+    read_component Cs = phase ↓ Ks Ss ->
+    read_component Cr = phase ↓ Kr Sr ->
+    Ks ∋ c_send c e □ Ks' ->
+    Kr ∋ c_recv c x □ Kr' ->
+    replace_leaf Cs (comp_proc (advance ↓ Ks' Ss)) P2 P2' ->
+    replace_leaf Cr (comp_proc (advance ↓ Kr' Sr)) P1 P1' ->
+    Σ ⊳ ‹ pg_par P1 P2, E › ⇝
+      {|| pg_par P1' P2',
         map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E ||}
 where "Σ '⊳' '‹' D ',' E '›' '⇝' G" := (distri_step Σ D E G).
 
 
-(** One step of a whole mixed configuration: pick ANY component — the paper's
-    ⊎ is an unordered multiset union, hence the [Permutation] premise (same
-    device as [distri_comm]) — step it with [distri_step], put the resulting
-    components back, renormalise:  (D,E) ⊎ G₀ ⇝ norm(G₁ ⊎ G₀). **)
+(** One step of a whole mixed configuration: pick ANY branch component — ⊎
+    is an unordered multiset union, hence the [Permutation] premise — step
+    it with [distri_step], renormalise:  (D,E) ⊎ G₀ ⇝ norm(G₁ ⊎ G₀). **)
 Inductive mixed_step {dim} (Σ : interp dim)
     : distri_config dim -> distri_config dim -> Prop :=
 | mixed_lift : forall (G : distri_config dim) (D : program) (E : ensemble dim)

@@ -2,14 +2,13 @@
 
         Σ ⊢ₚ {{ Q }} P {{ R }}   ⟹   Σ ⊨ {{ Q }} P {{ R }}
 
-    Per-rule obligations, in planned order of attack:
-      1. conseq_sound
-      2. comm_done_sound
-      3. local_sound
-      4. par_disjoint_sound
-      5. comm_select_sound
-      6. par_comp_sound
-      7. branch_accum_sound
+    Per-rule obligations:
+      1. conseq_sound        (proven)
+      2. comm_done_sound     (proven)
+      3. par_disjoint_sound
+      4. comm_select_sound
+      5. par_comp_sound
+      6. branch_accum_sound
 ** **)
 
 From Stdlib Require Import Lists.List.
@@ -139,11 +138,17 @@ Section Soundness.
     forall (D : program) (E : ensemble dim) (G : distri_config dim),
       Σ ⊳ ‹ D, E › ⇝ G -> ensemble_ok E -> config_ok G.
   Proof.
-    intros interp_ok D E G Hstep; destruct Hstep; intros HokE.
-    - (* local *) apply config_ok_map.
+    intros interp_ok D E G Hstep; induction Hstep; intros HokE.
+    - (* ds_local *) apply config_ok_map.
       + intros c Hc. exact Hc.
       + eapply local_step_preserves; eauto.
-    - (* comm *)  constructor; [| constructor]. simpl.
+    - (* ds_par_l *) apply config_ok_map; auto.
+    - (* ds_par_r *) apply config_ok_map; auto.
+    - (* ds_comm_lr — a classical store update never touches ρ *)
+      constructor; [| constructor]. simpl.
+      apply ensemble_ok_map; auto. intros [s0 r0] Hst. exact Hst.
+    - (* ds_comm_rl *)
+      constructor; [| constructor]. simpl.
       apply ensemble_ok_map; auto. intros [s0 r0] Hst. exact Hst.
   Qed.
 
@@ -220,133 +225,125 @@ Section Soundness.
     lra.
   Qed.
 
-  (** ** 2. Comm-Done  — a program of exhausted communication phases performs
-         no state change: {Q} ε_K ‖ … ‖ ε_K {Q}.
+  (** ** 2. Comm-Done — {Q} ε_K ∥ … ∥ ε_K {Q}.  Every ⟨ₖ []⟩ leaf reads as
+         ↓, so the row is stuck and already terminal: E = {(s,r)} and the
+         trace inequality is an equality. *)
 
-         Semantic shape: every process of [par_comm Ks] with all-empty blocks
-         is [phase ↓ [] terminated], which can take NO step (no local block
-         to run, no endpoint to select from an empty block).  So the initial
-         configuration is the only reachable one, and the proof splits:
-           Ks = []      the empty program is terminal at once, E = {(s,r)},
-                        and the trace inequality is an equality;
-           Ks nonempty  a dead phase is not syntactically [terminated], so no
-                        terminal configuration is ever reached and the triple
-                        holds vacuously (Term is empty).                    *)
-
-  Lemma par_comm_empty_stuck :
-    forall (Ks : list cblock) (E0 : ensemble dim) (G : distri_config dim),
-      Forall (fun K => K = []) Ks ->
-      Σ ⊳ ‹ par_comm Ks, E0 › ⇝ G -> False.
+  Lemma all_comm_done_leaf :
+    forall (a b : component) (P P' : program),
+      replace_leaf a b P P' -> all_comm_done P -> a = comp_comm nil.
   Proof.
-    intros Ks E0 G HK Hstep.
-    inversion Hstep as [l1 L K S l2 E' Gl Hl HeqP HeqE
-                       | D Ks0 S Ks0' Kr T Kr' rest c e x E' Hperm Hs1 Hs2 HeqP];
-      subst.
-    - (* a Local step needs a phase with a live local block *)
-      assert (Hin : In (phase (r_more L) K S) (par_comm Ks))
-        by (rewrite <- HeqP; apply in_elt).
-      apply in_map_iff in Hin as (K' & Heq & _). discriminate.
-    - (* a Communicate step needs an endpoint in some block — all are empty *)
-      assert (Hin : In (phase ↓ Ks0 S) (par_comm Ks)).
-      { eapply Permutation_in; [apply Permutation_sym; eassumption |].
-        left; reflexivity. }
-      apply in_map_iff in Hin as (K' & Heq & HinK).
-      injection Heq as HK0 _. subst K'.
-      rewrite Forall_forall in HK. specialize (HK _ HinK). subst Ks0.
-      destruct Hs1 as (pre & post & Hnil & _).
-      destruct pre; discriminate.
+    intros a b P P' Hrl; induction Hrl; intro Hacd; inversion Hacd; subst; auto.
+  Qed.
+
+  Lemma comm_done_stuck :
+    forall (PK : program),
+      all_comm_done PK ->
+      forall (E0 : ensemble dim) (G : distri_config dim),
+        Σ ⊳ ‹ PK, E0 › ⇝ G -> False.
+  Proof.
+    intros PK Hacd; induction Hacd as [| P1 P2 Hacd1 IH1 Hacd2 IH2];
+      intros E0 G Hstep.
+    - (* leaf: reads as ↓, no rule applies *)
+      inversion Hstep; subst; simpl in *; congruence.
+    - (* ∥ node: subtree step (IH) or a rendezvous whose sender must be ε *)
+      inversion Hstep; subst; eauto.
+      + match goal with
+        | Hrl : replace_leaf _ _ P1 _ |- _ =>
+            pose proof (all_comm_done_leaf _ _ _ _ Hrl Hacd1); subst
+        end;
+        match goal with
+        | Hrd : read_component (comp_comm nil) = _ |- _ =>
+            simpl in Hrd; discriminate Hrd
+        end.
+      + match goal with
+        | Hrl : replace_leaf _ _ P2 _ |- _ =>
+            pose proof (all_comm_done_leaf _ _ _ _ Hrl Hacd2); subst
+        end;
+        match goal with
+        | Hrd : read_component (comp_comm nil) = _ |- _ =>
+            simpl in Hrd; discriminate Hrd
+        end.
   Qed.
 
   Lemma comm_done_no_mixed_step :
-    forall (Ks : list cblock) (E0 : ensemble dim) (G2 : distri_config dim),
-      Forall (fun K => K = []) Ks ->
-      mixed_step Σ ({|| par_comm Ks, E0 ||}) G2 -> False.
+    forall (PK : program) (E0 : ensemble dim) (G2 : distri_config dim),
+      all_comm_done PK ->
+      mixed_step Σ ({|| PK, E0 ||}) G2 -> False.
   Proof.
-    intros Ks E0 G2 HK Hstep.
+    intros PK E0 G2 Hacd Hstep.
     inversion Hstep as [G D E G0 G1 Hperm Hd]; subst.
     apply Permutation_length_1_inv in Hperm.
     injection Hperm as HD HE HG0. subst.
-    eapply par_comm_empty_stuck; eauto.
+    eapply comm_done_stuck; eauto.
   Qed.
 
   Lemma comm_done_star_id :
-    forall (Ks : list cblock) (E0 : ensemble dim) (G : distri_config dim),
-      Forall (fun K => K = []) Ks ->
-      step_star Σ ({|| par_comm Ks, E0 ||}) G -> G = {|| par_comm Ks, E0 ||}.
+    forall (PK : program) (E0 : ensemble dim) (G : distri_config dim),
+      all_comm_done PK ->
+      step_star Σ ({|| PK, E0 ||}) G -> G = {|| PK, E0 ||}.
   Proof.
-    intros Ks E0 G HK Hstar.
+    intros PK E0 G Hacd Hstar.
     inversion Hstar; subst; auto.
     exfalso. eapply comm_done_no_mixed_step; eauto.
   Qed.
 
-  Lemma comm_done_sound : forall (Q : assertion dim) (Ks : list cblock),
-      Forall (fun K => K = []) Ks ->
-      Σ ⊨ {{ Q }} (par_comm Ks) {{ Q }}.
+  Lemma comm_done_sound : forall (Q : assertion dim) (PK : program),
+      all_comm_done PK ->
+      Σ ⊨ {{ Q }} PK {{ Q }}.
   Proof.
-    intros Q Ks HK s r HWFr Hherm Hpsd Hh Hd E HTerm.
+    intros Q PK Hacd s r HWFr Hherm Hpsd Hh Hd E HTerm.
     destruct HTerm as (G & Hstar & Hterm & Hcoll).
     apply comm_done_star_id in Hstar; auto. subst G.
-    destruct Ks as [| K Ks'].
-    - (* empty program: already terminal, E = [(s,r)], equality *)
-      simpl in Hcoll. subst E.
-      unfold total_degree. simpl. lra.
-    - (* dead phases are not [terminated]: no terminal config, vacuous *)
-      exfalso.
-      inversion Hterm as [| ? ? Hhead _]; subst.
-      simpl in Hhead.
-      inversion Hhead as [| ? ? Heq _]; subst.
-      discriminate.
+    simpl in Hcoll. subst E.
+    unfold total_degree. simpl. lra.
   Qed.
 
-  (** ** 3. Local bridge  — soundness of the LOCAL proof system ⊢ₗ, read as a
-         one-party program.  Discharges the [rule_par_disjoint] premise after
-         the interleaving has been serialised to [seq_all Ds]. *)
+  (** ** 3. Par-Disjoint-MP.  Route: [local_sound] is the one-leaf base
+         case; then wf ⟹ DisjMP (Thm 2.1) ⟹ interference freedom (Lemma 1)
+         normalises every interleaving to the [locals_seq]
+         sequentialisation. *)
   Lemma local_sound : forall (Q R : assertion dim) (L : lblock),
       Σ ⊢ₗ {{ Q }} L {{ R }} ->
-      Σ ⊨ {{ Q }} (par_local ([L])) {{ R }}.
+      Σ ⊨ {{ Q }} (⟨ₗ L ⟩) {{ R }}.
   Admitted.
 
-  (** ** 4. Par-Disjoint-MP  — communication-free local blocks in parallel:
-         any interleaving is equivalent to the fixed sequentialisation
-         [seq_all Ds].  Uses wf ⟹ DisjMP (paper Thm 2.1) ⟹ interference
-         freedom (paper Lemma 1). *)
-  Lemma par_disjoint_sound : forall (Q R : assertion dim) (Ds : list lblock),
-      wf_program (par_local Ds) ->
-      Σ ⊢ₗ {{ Q }} (seq_all Ds) {{ R }} ->
-      Σ ⊨ {{ Q }} (par_local Ds) {{ R }}.
+  Lemma par_disjoint_sound :
+    forall (Q R : assertion dim) (PD : program) (Dseq : lblock),
+      wf_program PD ->
+      locals_seq PD Dseq ->
+      Σ ⊢ₗ {{ Q }} Dseq {{ R }} ->
+      Σ ⊨ {{ Q }} PD {{ R }}.
   Admitted.
 
-  (** ** 5. Comm-Select-MP  — one selected rendezvous c!e ⋈ c?x behaves as the
-         assignment x := e (substitution in the precondition); the residual
-         phase is handled by the recursive premise.  Same-phase independence
-         (paper Lemma 2) lets the selected rendezvous be commuted first. *)
+  (** ** 4. Comm-Select-MP.  One rendezvous c!e ⋈ c?x behaves as x := e;
+         Lemma 2 commutes the selected rendezvous first. *)
   Lemma comm_select_sound :
-    forall (Q R : assertion dim) (Ks : list cblock) (Ki Ki' Kj Kj' : cblock)
-           (rest : list cblock) (c : chan) (e : expr) (x : var),
-      wf_program (par_comm Ks) ->
-      Permutation Ks (Ki :: Kj :: rest) ->
+    forall (Q R : assertion dim) (PK P1 PK' : program)
+           (Ki Ki' Kj Kj' : cblock) (c : chan) (e : expr) (x : var),
+      wf_program PK ->
+      replace_leaf (comp_comm Ki) (comp_comm Ki') PK P1 ->
+      replace_leaf (comp_comm Kj) (comp_comm Kj') P1 PK' ->
       selects Ki (c_send c e) Ki' ->
       selects Kj (c_recv c x) Kj' ->
-      Σ ⊨ {{ Q }} (par_comm (Ki' :: Kj' :: rest)) {{ R }} ->
-      Σ ⊨ {{ assertion_subst Q x e }} (par_comm Ks) {{ R }}.
+      Σ ⊨ {{ Q }} PK' {{ R }} ->
+      Σ ⊨ {{ assertion_subst Q x e }} PK {{ R }}.
   Admitted.
 
-  (** ** 6. Par-Comp-MP  — every terminating distributed run of the padded
-         program (D_i;K_i;T_i)‖… factors through the three aligned stages
-         (paper Lemma 2 normalises runs to prefix-phase-tail order). *)
+  (** ** 5. Par-Comp-MP.  Every terminating run factors through the three
+         aligned stages (Lemma 2 normalises runs to prefix-phase-tail
+         order). *)
   Lemma par_comp_sound :
-    forall (Q0 Q1 Q2 Q3 : assertion dim)
-           (Ds : list lblock) (Ks : list cblock) (Ts : list process),
-      wf_program (par_phases Ds Ks Ts) ->
-      length Ds = length Ks -> length Ks = length Ts ->
-      Σ ⊨ {{ Q0 }} (par_local Ds) {{ Q1 }} ->
-      Σ ⊨ {{ Q1 }} (par_comm Ks)  {{ Q2 }} ->
-      Σ ⊨ {{ Q2 }} Ts             {{ Q3 }} ->
-      Σ ⊨ {{ Q0 }} (par_phases Ds Ks Ts) {{ Q3 }}.
+    forall (Q0 Q1 Q2 Q3 : assertion dim) (PD PK PT P : program),
+      zip3 PD PK PT P ->
+      wf_program P ->
+      Σ ⊨ {{ Q0 }} PD {{ Q1 }} ->
+      Σ ⊨ {{ Q1 }} PK {{ Q2 }} ->
+      Σ ⊨ {{ Q2 }} PT {{ Q3 }} ->
+      Σ ⊨ {{ Q0 }} P {{ Q3 }}.
   Admitted.
 
-  (** ** 7. Branch-Accum  — finite additivity: sum the pre-effects and disjoin
-         the mutually exclusive classical postconditions over the family. *)
+  (** ** 6. Branch-Accum — finite additivity over the family. *)
   Lemma branch_accum_sound :
     forall (phi : formula) (B : qpred dim) (P : program)
            (A0 : qpred dim) (psi0 : formula)
@@ -362,14 +359,27 @@ Section Soundness.
 
   (** ** Well-formedness is inherited by the sub-programs appearing in rule
          premises — needed to thread [wf_program] through the induction. *)
-  Lemma wf_par_comm_residual :
-    forall (Ks : list cblock) (Ki Ki' Kj Kj' : cblock) (rest : list cblock)
+  Lemma wf_comm_select_residual :
+    forall (PK P1 PK' : program) (Ki Ki' Kj Kj' : cblock)
            (c : chan) (e : expr) (x : var),
-      wf_program (par_comm Ks) ->
-      Permutation Ks (Ki :: Kj :: rest) ->
+      wf_program PK ->
+      replace_leaf (comp_comm Ki) (comp_comm Ki') PK P1 ->
+      replace_leaf (comp_comm Kj) (comp_comm Kj') P1 PK' ->
       selects Ki (c_send c e) Ki' ->
       selects Kj (c_recv c x) Kj' ->
-      wf_program (par_comm (Ki' :: Kj' :: rest)).
+      wf_program PK'.
+  Admitted.
+
+  Lemma wf_zip3_prefix : forall PD PK PT P : program,
+      zip3 PD PK PT P -> wf_program P -> wf_program PD.
+  Admitted.
+
+  Lemma wf_zip3_comm : forall PD PK PT P : program,
+      zip3 PD PK PT P -> wf_program P -> wf_program PK.
+  Admitted.
+
+  Lemma wf_zip3_tail : forall PD PK PT P : program,
+      zip3 PD PK PT P -> wf_program P -> wf_program PT.
   Admitted.
 
   (** ** Theorem 4.1 (Soundness of the proof system).
@@ -383,17 +393,19 @@ Section Soundness.
       Σ ⊨ {{ Q }} P {{ R }}.
   Proof.
     intros interp_ok Q R P Hwf Hd. revert Hwf. induction Hd; intro Hwf.
-    - (* Par-Disjoint-MP *) apply par_disjoint_sound; assumption.
+    - (* Par-Disjoint-MP *) eapply par_disjoint_sound; eassumption.
     - (* Comm-Done *)       apply comm_done_sound; assumption.
     - (* Comm-Select-MP *)  eapply comm_select_sound; try eassumption.
-      apply IHHd. eapply wf_par_comm_residual; eassumption.
+      apply IHHd. eapply wf_comm_select_residual; eassumption.
     - (* Par-Comp-MP *)     eapply par_comp_sound; try eassumption.
-      + apply IHHd1. admit. (* wf of the prefix stage — from Hwf *)
-      + apply IHHd2. admit. (* wf of the comm stage   — from Hwf *)
-      + apply IHHd3. admit. (* wf of the tail stage   — from Hwf *)
+      + apply IHHd1. eapply wf_zip3_prefix; eassumption.
+      + apply IHHd2. eapply wf_zip3_comm; eassumption.
+      + apply IHHd3. eapply wf_zip3_tail; eassumption.
     - (* Branch-Accum *)    apply branch_accum_sound.
       + apply IHHd; assumption.
-      + (* the family premise, pointwise via the Forall IH *) admit.
+      + (* the family premise, pointwise — the auto-generated induction
+           principle provides no IH inside the Forall (nested occurrence);
+           discharging this needs a manual nested induction *) admit.
       + assumption.
     - (* Conseq *)          eapply conseq_sound.
       + exact interp_ok.

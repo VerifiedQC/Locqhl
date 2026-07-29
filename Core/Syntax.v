@@ -73,12 +73,55 @@ Inductive residual : Type :=
 
 Notation "'↓'" := r_done (at level 0).
 
-(** ** Processes. ** **)
+(** ** Processes (sequential process S). ** **)
 Inductive process : Type :=
 | terminated : process                                (* ↓ *)
 | phase      : residual -> cblock -> process -> process. (* (L;K) ; S *)
 
-Definition program : Type := list process.   (* P ::= S_1 ‖ … ‖ S_n *)
+(** ** Components (Fig. 2(b)) — one party's contribution to a program.
+    A D;K;T phase leaf is written [comp_proc (phase (r_more D) K T)]. **)
+Inductive component : Type :=
+| comp_local : lblock  -> component                        (* D       *)
+| comp_comm  : cblock  -> component                        (* K       *)
+| comp_proc  : process -> component.                       (* T or S  *)
+
+(** ** Distributed programs: P ::= S₁ ‖ … ‖ Sₙ, a free binary parallel tree
+    of components.  Well-formedness (Def 2.1) is a side condition
+    (WellFormed.wf_program), not syntax. **)
+Inductive program : Type :=
+| pg_comp : component -> program              (* a single component      *)
+| pg_par  : program -> program -> program.    (* P ∥ P                   *)
+
+(** Reading a component as the process it abbreviates (erasure conventions,
+    p.7):  D ↦ D;ε_K;↓,  K ↦ ↓;K;↓,  ε_K;↓ ↦ ↓.  The semantics and all
+    footprint definitions look at a leaf only through its reading. **)
+Definition read_component (C : component) : process :=
+  match C with
+  | comp_local D     => phase (r_more D) [] terminated
+  | comp_comm  []    => terminated
+  | comp_comm  K     => phase r_done K terminated
+  | comp_proc  T     => T
+  end.
+
+(** Termination of a component / of a program. **)
+Definition comp_terminated (C : component) : Prop :=
+  read_component C = terminated.
+
+Fixpoint prog_terminated (P : program) : Prop :=
+  match P with
+  | pg_comp C    => comp_terminated C
+  | pg_par P1 P2 => prog_terminated P1 /\ prog_terminated P2
+  end.
+
+(** [replace_leaf a b P P']: P' is P with ONE leaf occurrence of a replaced
+    by b, in place.  The Communicate step and Comm-Select-MP select their
+    two endpoints this way. **)
+Inductive replace_leaf (a b : component) : program -> program -> Prop :=
+| rl_here  : replace_leaf a b (pg_comp a) (pg_comp b)
+| rl_left  : forall P P' Q,
+    replace_leaf a b P P' -> replace_leaf a b (pg_par P Q) (pg_par P' Q)
+| rl_right : forall P Q Q',
+    replace_leaf a b Q Q' -> replace_leaf a b (pg_par P Q) (pg_par P Q').
 
 (** ** Variables of, and substitution into, program expressions ******** *)
 
@@ -160,7 +203,10 @@ Notation "'if' b 'then' c1 'else' c0" := (l_if b c1 c0)
       ε              empty communication block  ε_K
       [ α ; β ]      communication block  α □ β    (a [cblock] is a list)
       L ⨾ K ⨾ S      one phase: local block L, comm block K, then S
-      [ S ; T ]      distributed program  S ‖ T    (a [program] is a list)
+      p ∥ q          parallel composition  (pg_par)
+      ⟨ₗ D ⟩         a leaf holding a bare local block D   (pg_comp (comp_local D))
+      ⟨ₖ K ⟩         a leaf holding a bare comm block  K   (pg_comp (comp_comm  K))
+      ⟨ₛ T ⟩         a leaf holding a whole process    T   (pg_comp (comp_proc  T))
     A phase whose local block has already finished is written out directly
     as [phase ↓ K S].
 ** **)
@@ -174,5 +220,11 @@ Notation "c '?' x" := (c_recv c x)
 Notation "'ε'" := (@nil caction) : proc_scope.
 Notation "L '⨾' K '⨾' S" := (phase (r_more L) K S)
   (at level 100, K at level 99, right associativity) : proc_scope.
+
+Notation "p '∥' q" := (pg_par p q)
+  (at level 41, right associativity) : proc_scope.
+Notation "'⟨ₗ' D '⟩'" := (pg_comp (comp_local D)) (at level 0) : proc_scope.
+Notation "'⟨ₖ' K '⟩'" := (pg_comp (comp_comm  K)) (at level 0) : proc_scope.
+Notation "'⟨ₛ' T '⟩'" := (pg_comp (comp_proc  T)) (at level 0) : proc_scope.
 
 Open Scope proc_scope.
