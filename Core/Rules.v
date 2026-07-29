@@ -87,11 +87,15 @@ Inductive local_derivable {dim} (Σ : interp dim)
     Σ ⊢ₗ {{ and_guard Q b false }} L0 {{ R }} ->
     Σ ⊢ₗ {{ Q }} <{ if b then L1 else L0 }> {{ R }}
 
-(* Conseq *)
+(* Conseq.  The target postcondition must denote an effect: the paper's
+   assertion-formation check (p.10), surfacing as a side condition exactly
+   where a new assertion enters a derivation — same treatment as
+   wf_program on Par-Comp. *)
 | rule_conseq : forall Q Q' R R' L,
     Q' ⊨[Σ] Q ->
     Σ ⊢ₗ {{ Q }} L {{ R }} ->
     R ⊨[Σ] R' ->
+    wf_assertion Σ R' ->
     Σ ⊢ₗ {{ Q' }} L {{ R' }}
 
 where "Σ '⊢ₗ' '{{' Pre '}}' L '{{' Post '}}'" := (local_derivable Σ Pre L Post).
@@ -189,11 +193,12 @@ Inductive derivable {dim} (Σ : interp dim)
     ForallOrdPairs (exclusive Σ) (psi0 :: map snd fam) ->
     Σ ⊢ₚ {{ mk_assertion phi (qsum A0 (map fst fam)) }} P
         {{ mk_assertion (fdisj psi0 (map snd fam)) B }}
-(* Conseq *)
+(* Conseq (same wf_assertion side condition as the local rule). *)
 | rule_conseq_d : forall Q Q' R R' P,
     Q' ⊨[Σ] Q ->
     Σ ⊢ₚ {{ Q }} P {{ R }} ->
     R ⊨[Σ] R' ->
+    wf_assertion Σ R' ->
     Σ ⊢ₚ {{ Q' }} P {{ R' }}
 
 where "Σ '⊢ₚ' '{{' Pre '}}' P '{{' Post '}}'" := (derivable Σ Pre P Post).

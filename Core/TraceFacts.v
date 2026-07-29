@@ -242,3 +242,73 @@ Proof.
     destruct st as [s r]. destruct Hst as (H1 & H2 & H3).
     apply degree_entails_wf; auto.
 Qed.
+
+(** ** Substitution lemmas (paper Appendix A.2) *************************
+
+    Substituting t for x and then evaluating at σ equals evaluating at
+    σ[x ↦ ⟦t⟧σ] — for expressions, boolean conditions, formulas, quantum
+    predicates, and finally [degree].
+*********************************************************************)
+
+Fixpoint eval_expr_subst (fn : funsym -> list val -> val)
+    (s : store) (x : var) (t : expr) (e : expr) {struct e} :
+    eval_expr fn s (expr_subst e x t)
+    = eval_expr fn (s [ x |-> eval_expr fn s t ]) e.
+Proof.
+  destruct e as [v | y | f es]; simpl.
+  - reflexivity.
+  - unfold store_update. destruct (Nat.eqb x y); reflexivity.
+  - f_equal. induction es as [| e0 es' IHes]; simpl; [reflexivity |].
+    f_equal; [apply eval_expr_subst | exact IHes].
+Qed.
+
+Lemma eval_bool_subst : forall (fn : funsym -> list val -> val)
+    (rl : relsym -> list val -> bool) (s : store) (x : var) (t : expr)
+    (b : bexpr),
+    eval_bool fn rl s (bexpr_subst b x t)
+    = eval_bool fn rl (s [ x |-> eval_expr fn s t ]) b.
+Proof.
+  intros fn rl s x t b; induction b; simpl;
+    try reflexivity;
+    try (now rewrite IHb);
+    try (now rewrite IHb1, IHb2).
+  f_equal. rewrite map_map. apply map_ext. intro e0. apply eval_expr_subst.
+Qed.
+
+Lemma formula_holds_subst :
+  forall {dim} (Σ : interp dim) (s : store) (x : var) (t : expr) (p : formula),
+    formula_holds Σ s (formula_subst p x t)
+    = formula_holds Σ (s [ x |-> eval_expr (i_fn Σ) s t ]) p.
+Proof.
+  intros dim Σ s x t p; induction p; simpl;
+    try (now rewrite IHp);
+    try (now rewrite IHp1, IHp2).
+  - apply eval_bool_subst.
+  - now rewrite !eval_expr_subst.
+Qed.
+
+Lemma qpred_denote_subst :
+  forall {dim} (Σ : interp dim) (s : store) (x : var) (t : expr) (A : qpred dim),
+    qpred_denote Σ s (qpred_subst A x t)
+    = qpred_denote Σ (s [ x |-> eval_expr (i_fn Σ) s t ]) A.
+Proof.
+  intros dim Σ s x t A;
+    induction A as [f args | g args A' IH | A1 IH1 A2 IH2]; simpl.
+  - f_equal. rewrite map_map. apply map_ext. intro e0. apply eval_expr_subst.
+  - rewrite IH.
+    assert (HK : map (eval_expr (i_fn Σ) s) (map (fun e => expr_subst e x t) args)
+               = map (eval_expr (i_fn Σ) (s [ x |-> eval_expr (i_fn Σ) s t ])) args).
+    { rewrite map_map. apply map_ext. intro e0. apply eval_expr_subst. }
+    rewrite HK. reflexivity.
+  - now rewrite IH1, IH2.
+Qed.
+
+Lemma degree_subst :
+  forall {dim} (Σ : interp dim) (Q : assertion dim) (x : var) (t : expr)
+         (s : store) (r : qstate dim),
+    degree Σ (assertion_subst Q x t) (s, r)
+    = degree Σ Q (s [ x |-> eval_expr (i_fn Σ) s t ], r).
+Proof.
+  intros. unfold degree, assertion_subst; simpl.
+  rewrite formula_holds_subst, qpred_denote_subst. reflexivity.
+Qed.
