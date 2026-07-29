@@ -1027,6 +1027,76 @@ Section Soundness.
       zip3 PD PK PT P -> wf_program P -> wf_program PT.
   Admitted.
 
+  (** ** Induction principle for [derivable] with the Branch-Accum family IH.
+         The generated principle offers no IH for that rule's premise: the
+         sub-derivations sit inside a [Forall], a nested occurrence.  Same
+         principle, recursion written out, with an inner fix over the
+         family. *)
+  Fixpoint derivable_ind'
+      (Pr : assertion dim -> program -> assertion dim -> Prop)
+      (Hpd : forall Q R PD Dseq,
+          locals_seq PD Dseq -> Σ ⊢ₗ {{ Q }} Dseq {{ R }} -> Pr Q PD R)
+      (Hcd : forall Q PK, all_comm_done PK -> Pr Q PK Q)
+      (Hcs : forall Q R PK P1 PK' Ki Ki' Kj Kj' c e x,
+          replace_leaf (comp_comm Ki) (comp_comm Ki') PK P1 ->
+          replace_leaf (comp_comm Kj) (comp_comm Kj') P1 PK' ->
+          selects Ki (c_send c e) Ki' ->
+          selects Kj (c_recv c x) Kj' ->
+          Σ ⊢ₚ {{ Q }} PK' {{ R }} -> Pr Q PK' R ->
+          Pr (assertion_subst Q x e) PK R)
+      (Hpc : forall Q0 Q1 Q2 Q3 PD PK PT P,
+          zip3 PD PK PT P -> wf_program P ->
+          Σ ⊢ₚ {{ Q0 }} PD {{ Q1 }} -> Pr Q0 PD Q1 ->
+          Σ ⊢ₚ {{ Q1 }} PK {{ Q2 }} -> Pr Q1 PK Q2 ->
+          Σ ⊢ₚ {{ Q2 }} PT {{ Q3 }} -> Pr Q2 PT Q3 ->
+          Pr Q0 P Q3)
+      (Hba : forall phi B P A0 psi0 fam,
+          Σ ⊢ₚ {{ mk_assertion phi A0 }} P {{ mk_assertion psi0 B }} ->
+          Pr (mk_assertion phi A0) P (mk_assertion psi0 B) ->
+          Forall (fun Api => Σ ⊢ₚ {{ mk_assertion phi (fst Api) }} P
+                                 {{ mk_assertion (snd Api) B }}) fam ->
+          Forall (fun Api => Pr (mk_assertion phi (fst Api)) P
+                                (mk_assertion (snd Api) B)) fam ->
+          ForallOrdPairs (exclusive Σ) (psi0 :: map snd fam) ->
+          Pr (mk_assertion phi (qsum A0 (map fst fam))) P
+             (mk_assertion (fdisj psi0 (map snd fam)) B))
+      (Hcq : forall Q Q' R R' P,
+          Q' ⊨[Σ] Q -> Σ ⊢ₚ {{ Q }} P {{ R }} -> Pr Q P R ->
+          R ⊨[Σ] R' -> wf_assertion Σ R' -> Pr Q' P R')
+      (Q : assertion dim) (P : program) (R : assertion dim)
+      (d : Σ ⊢ₚ {{ Q }} P {{ R }}) {struct d} : Pr Q P R :=
+    let rec := derivable_ind' Pr Hpd Hcd Hcs Hpc Hba Hcq in
+    match d with
+    | rule_par_disjoint _ Q R PD Dseq h1 h2 => Hpd Q R PD Dseq h1 h2
+    | rule_comm_done _ Q PK h => Hcd Q PK h
+    | rule_comm_select _ Q R PK P1 PK' Ki Ki' Kj Kj' c e x h1 h2 h3 h4 d' =>
+        Hcs Q R PK P1 PK' Ki Ki' Kj Kj' c e x h1 h2 h3 h4 d' (rec _ _ _ d')
+    | rule_par_comp _ Q0 Q1 Q2 Q3 PD PK PT P h1 h2 d1 d2 d3 =>
+        Hpc Q0 Q1 Q2 Q3 PD PK PT P h1 h2
+            d1 (rec _ _ _ d1) d2 (rec _ _ _ d2) d3 (rec _ _ _ d3)
+    | rule_branch_accum _ phi B P A0 psi0 fam d0 df hex =>
+        Hba phi B P A0 psi0 fam d0 (rec _ _ _ d0) df
+            ((fix go (l : list (qpred dim * formula))
+                  (h : Forall (fun Api =>
+                         Σ ⊢ₚ {{ mk_assertion phi (fst Api) }} P
+                             {{ mk_assertion (snd Api) B }}) l)
+               {struct h}
+               : Forall (fun Api =>
+                   Pr (mk_assertion phi (fst Api)) P
+                      (mk_assertion (snd Api) B)) l :=
+                match h in Forall _ l0
+                      return Forall (fun Api =>
+                               Pr (mk_assertion phi (fst Api)) P
+                                  (mk_assertion (snd Api) B)) l0 with
+                | Forall_nil _ => Forall_nil _
+                | Forall_cons x0 hx hl =>
+                    Forall_cons x0 (rec _ _ _ hx) (go _ hl)
+                end) fam df)
+            hex
+    | rule_conseq_d _ Q Q' R R' P h1 d' h2 h3 =>
+        Hcq Q Q' R R' P h1 d' (rec _ _ _ d') h2 h3
+    end.
+
   (** ** Theorem 4.1 (Soundness of the proof system).
          Assembled from the per-rule lemmas by induction on the derivation —
          the wiring below is machine-checked. *)
@@ -1037,28 +1107,43 @@ Section Soundness.
       Σ ⊢ₚ {{ Q }} P {{ R }} ->
       Σ ⊨ {{ Q }} P {{ R }}.
   Proof.
-    intros interp_ok Q R P Hwf Hd. revert Hwf. induction Hd; intro Hwf.
-    - (* Par-Disjoint-MP *) eapply par_disjoint_sound; eassumption.
-    - (* Comm-Done *)       apply comm_done_sound; assumption.
-    - (* Comm-Select-MP *)  eapply comm_select_sound; try eassumption.
-      apply IHHd. eapply wf_comm_select_residual; eassumption.
-    - (* Par-Comp-MP *)     eapply par_comp_sound; try eassumption.
-      + apply IHHd1. eapply wf_zip3_prefix; eassumption.
-      + apply IHHd2. eapply wf_zip3_comm; eassumption.
-      + apply IHHd3. eapply wf_zip3_tail; eassumption.
-    - (* Branch-Accum *)    apply branch_accum_sound.
-      + apply IHHd; assumption.
-      + (* the family premise, pointwise — the auto-generated induction
-           principle provides no IH inside the Forall (nested occurrence);
-           discharging this needs a manual nested induction *) admit.
-      + assumption.
-    - (* Conseq — wf_assertion now supplied by the rule itself *)
-      eapply conseq_sound.
-      + exact interp_ok.
-      + eassumption.
-      + eassumption.
-      + apply IHHd; assumption.
-      + assumption.
-  Admitted.
+    intros interp_ok.
+    assert (main : forall (Q : assertion dim) (P : program) (R : assertion dim),
+               Σ ⊢ₚ {{ Q }} P {{ R }} -> wf_program P -> Σ ⊨ {{ Q }} P {{ R }}).
+    { apply (derivable_ind'
+               (fun Q P R => wf_program P -> Σ ⊨ {{ Q }} P {{ R }})).
+      - (* Par-Disjoint-MP *)
+        intros q r pd dseq Hls Hloc Hwf.
+        eapply par_disjoint_sound; eassumption.
+      - (* Comm-Done *)
+        intros q pk Hacd Hwf. apply comm_done_sound; assumption.
+      - (* Comm-Select-MP *)
+        intros q r pk p1 pk' ki ki' kj kj' ch ex xv Hrl1 Hrl2 Hs1 Hs2 Hd0 IH Hwf.
+        eapply comm_select_sound; try eassumption.
+        apply IH. eapply wf_comm_select_residual; eassumption.
+      - (* Par-Comp-MP *)
+        intros q0 q1 q2 q3 pd pk pt p Hz Hwfp Hd1 IH1 Hd2 IH2 Hd3 IH3 Hwf.
+        eapply par_comp_sound; try eassumption.
+        + apply IH1. eapply wf_zip3_prefix; eassumption.
+        + apply IH2. eapply wf_zip3_comm; eassumption.
+        + apply IH3. eapply wf_zip3_tail; eassumption.
+      - (* Branch-Accum *)
+        intros phi bb p a0 psi0 fam Hd0 IH0 Hdf IHf Hex Hwf.
+        apply branch_accum_sound.
+        + apply IH0; assumption.
+        + (* strip each family member's wf_program hypothesis *)
+          eapply Forall_impl; [| exact IHf].
+          cbv beta. intros ? Him. apply Him. exact Hwf.
+        + assumption.
+      - (* Conseq — wf_assertion supplied by the rule itself *)
+        intros q q' r r' p He1 Hd0 IH0 He2 Hwfa Hwf.
+        eapply conseq_sound.
+        + exact interp_ok.
+        + eassumption.
+        + eassumption.
+        + apply IH0; assumption.
+        + assumption. }
+    intros Q R P Hwf Hd. apply main; assumption.
+  Qed.
 
 End Soundness.
