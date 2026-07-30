@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds vendored QuantumLib + Core/ inside the pinned official Rocq 9.1
+      # image (rocq/rocq-prover:9.1 — coqorg/coq:9.1 does not exist). The action
+      # mounts the repo and runs `script` with opam env active as the image user.
+      - name: Build (Rocq 9.1)
+        uses: coq-community/docker-coq-action@v1
+        with:
+          custom_image: 'rocq/rocq-prover:9.1'
+          # The workspace is checked out root-owned but the image runs as the
+          # non-root `rocq` user; take ownership so `rocq makefile`/`make` can
+          # write Makefile.coq and the .vo files.
+          before_script: |
+            sudo chown -R "$(whoami):$(whoami)" .
+          install: |            # QuantumLib is vendored; no external opam deps needed.
+            true
+          script: |
+            make
+
+  admit-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No new admits
+        run: bash scripts/check-admits.sh
