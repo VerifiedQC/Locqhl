@@ -1179,121 +1179,130 @@ Section SoundnessFacts.
     - apply incl_nil_l.
   Qed.
 
-  Lemma replace_leaf_footprints : forall a b P P', replace_leaf a b P P' ->
-      incl (comp_change b) (comp_change a) ->
-      incl (comp_cvar b) (comp_cvar a) ->
-      incl (comp_qvar b) (comp_qvar a) ->
+  Lemma comm_leaf_chan_iff : forall K a K' d,
+      selects K a K' -> d <> caction_chan a ->
+      (In d (comp_chan (comp_comm K')) <-> In d (comp_chan (comp_comm K))).
+  Proof.
+    intros K a K' d Hs Hne. unfold comp_chan. rewrite !comm_leaf_chan.
+    apply (selects_chan_iff _ _ _ _ Hs Hne).
+  Qed.
+
+  (** ** Consuming one endpoint from a communication phase.
+         [comm_sel] matches the phase leaf by leaf, so each fact below is a
+         plain induction on the derivation. *)
+
+  Lemma comm_sel_none_eq : forall oa P P',
+      comm_sel oa P P' -> oa = None -> P = P'.
+  Proof.
+    intros oa P P' H; induction H; intro Hn; try discriminate; try reflexivity.
+    - f_equal; [apply IHcomm_sel1, Hn | apply IHcomm_sel2; reflexivity].
+    - f_equal; [apply IHcomm_sel1; reflexivity | apply IHcomm_sel2, Hn].
+  Qed.
+
+  Lemma comm_sel_footprints : forall oa P P', comm_sel oa P P' ->
       incl (program_change P') (program_change P)
       /\ incl (program_cvar P') (program_cvar P)
       /\ incl (program_qvar P') (program_qvar P).
   Proof.
-    intros a b P P' Hr; induction Hr as [| Pa Pa' Qb Hr IH | Pa Qb Qb' Hr IH];
-      intros Hc Hv Hq.
-    - repeat split; assumption.
-    - destruct (IH Hc Hv Hq) as (C & V & Q0); simpl; repeat split; apply incl_app;
-        [ apply incl_appl, C | apply incl_appr, incl_refl
-        | apply incl_appl, V | apply incl_appr, incl_refl
-        | apply incl_appl, Q0 | apply incl_appr, incl_refl ].
-    - destruct (IH Hc Hv Hq) as (C & V & Q0); simpl; repeat split; apply incl_app;
-        [ apply incl_appl, incl_refl | apply incl_appr, C
-        | apply incl_appl, incl_refl | apply incl_appr, V
-        | apply incl_appl, incl_refl | apply incl_appr, Q0 ].
+    intros oa P P' H; induction H.
+    - repeat split; apply incl_refl.
+    - apply (comm_leaf_footprint_incl _ _ _ H).
+    - destruct IHcomm_sel1 as (C1 & V1 & Q1);
+        destruct IHcomm_sel2 as (C2 & V2 & Q2); simpl.
+      repeat split; apply incl_app;
+        [ apply incl_appl, C1 | apply incl_appr, C2
+        | apply incl_appl, V1 | apply incl_appr, V2
+        | apply incl_appl, Q1 | apply incl_appr, Q2 ].
+    - destruct IHcomm_sel1 as (C1 & V1 & Q1);
+        destruct IHcomm_sel2 as (C2 & V2 & Q2); simpl.
+      repeat split; apply incl_app;
+        [ apply incl_appl, C1 | apply incl_appr, C2
+        | apply incl_appl, V1 | apply incl_appr, V2
+        | apply incl_appl, Q1 | apply incl_appr, Q2 ].
   Qed.
 
-  Lemma replace_leaf_ownership : forall a b P P', replace_leaf a b P P' ->
-      incl (comp_change b) (comp_change a) ->
-      incl (comp_cvar b) (comp_cvar a) ->
-      incl (comp_qvar b) (comp_qvar a) ->
+  Lemma comm_sel_ownership : forall oa P P', comm_sel oa P P' ->
       wf_ownership P -> wf_ownership P'.
   Proof.
-    intros a b P P' Hr; induction Hr as [| Pa Pa' Qb Hr IH | Pa Qb Qb' Hr IH];
-      intros Hc Hv Hq.
+    intros oa P P' H; induction H; simpl.
     - intros _; constructor.
-    - intros (H1 & H2 & Ha & Hb & Hqq).
-      destruct (replace_leaf_footprints _ _ _ _ Hr Hc Hv Hq) as (C & V & Q0).
-      split; [apply (IH Hc Hv Hq), H1 | split; [exact H2 |]].
+    - intros _; constructor.
+    - intros (H1 & H2 & Ha & Hb & Hq).
+      destruct (comm_sel_footprints _ _ _ H) as (C1 & V1 & Q1).
+      destruct (comm_sel_footprints _ _ _ H0) as (C2 & V2 & Q2).
+      split; [apply IHcomm_sel1, H1 | split; [apply IHcomm_sel2, H2 |]].
       split; [| split].
-      + eapply disjoint_incl; [exact Ha | exact C | apply incl_refl].
-      + eapply disjoint_incl; [exact Hb | apply incl_refl | exact V].
-      + eapply disjoint_incl; [exact Hqq | exact Q0 | apply incl_refl].
-    - intros (H1 & H2 & Ha & Hb & Hqq).
-      destruct (replace_leaf_footprints _ _ _ _ Hr Hc Hv Hq) as (C & V & Q0).
-      split; [exact H1 | split; [apply (IH Hc Hv Hq), H2 |]].
+      + eapply disjoint_incl; [exact Ha | exact C1 | exact V2].
+      + eapply disjoint_incl; [exact Hb | exact C2 | exact V1].
+      + eapply disjoint_incl; [exact Hq | exact Q1 | exact Q2].
+    - intros (H1 & H2 & Ha & Hb & Hq).
+      destruct (comm_sel_footprints _ _ _ H) as (C1 & V1 & Q1).
+      destruct (comm_sel_footprints _ _ _ H0) as (C2 & V2 & Q2).
+      split; [apply IHcomm_sel1, H1 | split; [apply IHcomm_sel2, H2 |]].
       split; [| split].
-      + eapply disjoint_incl; [exact Ha | apply incl_refl | exact V].
-      + eapply disjoint_incl; [exact Hb | exact C | apply incl_refl].
-      + eapply disjoint_incl; [exact Hqq | apply incl_refl | exact Q0].
+      + eapply disjoint_incl; [exact Ha | exact C1 | exact V2].
+      + eapply disjoint_incl; [exact Hb | exact C2 | exact V1].
+      + eapply disjoint_incl; [exact Hq | exact Q1 | exact Q2].
   Qed.
 
-  Lemma replace_leaf_actions : forall K a K' P P',
-      replace_leaf (comp_comm K) (comp_comm K') P P' -> selects K a K' ->
-      exists rest, Permutation (program_actions P) (a :: rest)
-                /\ Permutation (program_actions P') rest.
+  Lemma comm_sel_actions : forall oa P P' a, comm_sel oa P P' -> oa = Some a ->
+      Permutation (program_actions P) (a :: program_actions P').
   Proof.
-    intros K a K' P P' Hr Hs;
-      induction Hr as [| Pa Pa' Qb Hr IH | Pa Qb Qb' Hr IH].
-    - destruct Hs as (pre & post & -> & ->).
-      exists (pre ++ post). split; cbn [program_actions];
-        rewrite comm_leaf_actions.
-      + apply Permutation_sym, Permutation_middle.
-      + apply Permutation_refl.
-    - destruct IH as (rest & H1 & H2).
-      exists (rest ++ program_actions Qb); split; cbn [program_actions].
-      + apply (Permutation_app_tail (program_actions Qb)) in H1. exact H1.
-      + apply Permutation_app_tail, H2.
-    - destruct IH as (rest & H1 & H2).
-      exists (program_actions Pa ++ rest); split; cbn [program_actions].
-      + eapply Permutation_trans; [apply Permutation_app_head, H1 |].
-        apply Permutation_sym, Permutation_middle.
-      + apply Permutation_app_head, H2.
+    intros oa P P' a H; induction H; intro Ha; try discriminate.
+    - injection Ha as ->. destruct H as (pre & post & -> & ->).
+      cbn [program_actions]; rewrite !comm_leaf_actions.
+      apply Permutation_sym, Permutation_middle.
+    - rewrite <- (comm_sel_none_eq _ _ _ H0 eq_refl).
+      cbn [program_actions].
+      change (a :: (program_actions P1' ++ program_actions P2))
+        with ((a :: program_actions P1') ++ program_actions P2).
+      apply Permutation_app_tail, IHcomm_sel1, Ha.
+    - rewrite <- (comm_sel_none_eq _ _ _ H eq_refl).
+      cbn [program_actions].
+      eapply Permutation_trans;
+        [apply Permutation_app_head, (IHcomm_sel2 Ha) |].
+      apply Permutation_sym, Permutation_middle.
   Qed.
 
-  Lemma replace_leaf_phase0 : forall K a K' P P',
-      replace_leaf (comp_comm K) (comp_comm K') P P' -> selects K a K' ->
-      exists rest, Permutation (concat (phase_at P 0%nat)) (a :: rest)
-                /\ Permutation (concat (phase_at P' 0%nat)) rest.
+  Lemma comm_sel_phase0 : forall oa P P' a, comm_sel oa P P' -> oa = Some a ->
+      Permutation (concat (phase_at P 0%nat)) (a :: concat (phase_at P' 0%nat)).
   Proof.
-    intros K a K' P P' Hr Hs;
-      induction Hr as [| Pa Pa' Qb Hr IH | Pa Qb Qb' Hr IH].
-    - destruct Hs as (pre & post & -> & ->).
-      exists (pre ++ post). split; cbn [phase_at concat];
-        rewrite comm_leaf_comm_at0, app_nil_r.
-      + apply Permutation_sym, Permutation_middle.
-      + apply Permutation_refl.
-    - destruct IH as (rest & H1 & H2).
-      exists (rest ++ concat (phase_at Qb 0%nat)); split; cbn [phase_at];
-        rewrite concat_app.
-      + apply (Permutation_app_tail (concat (phase_at Qb 0%nat))) in H1. exact H1.
-      + apply Permutation_app_tail, H2.
-    - destruct IH as (rest & H1 & H2).
-      exists (concat (phase_at Pa 0%nat) ++ rest); split; cbn [phase_at];
-        rewrite concat_app.
-      + eapply Permutation_trans; [apply Permutation_app_head, H1 |].
-        apply Permutation_sym, Permutation_middle.
-      + apply Permutation_app_head, H2.
+    intros oa P P' a H; induction H; intro Ha; try discriminate.
+    - injection Ha as ->. destruct H as (pre & post & -> & ->).
+      cbn [phase_at concat]; rewrite !comm_leaf_comm_at0, !app_nil_r.
+      apply Permutation_sym, Permutation_middle.
+    - rewrite <- (comm_sel_none_eq _ _ _ H0 eq_refl).
+      cbn [phase_at]; rewrite !concat_app.
+      change (a :: (concat (phase_at P1' 0%nat) ++ concat (phase_at P2 0%nat)))
+        with ((a :: concat (phase_at P1' 0%nat)) ++ concat (phase_at P2 0%nat)).
+      apply Permutation_app_tail, IHcomm_sel1, Ha.
+    - rewrite <- (comm_sel_none_eq _ _ _ H eq_refl).
+      cbn [phase_at]; rewrite !concat_app.
+      eapply Permutation_trans;
+        [apply Permutation_app_head, (IHcomm_sel2 Ha) |].
+      apply Permutation_sym, Permutation_middle.
   Qed.
 
-  Lemma replace_leaf_phase_later : forall K K' P P',
-      replace_leaf (comp_comm K) (comp_comm K') P P' ->
+  Lemma comm_sel_phase_later : forall oa P P', comm_sel oa P P' ->
       forall k, phase_at P' (S k) = phase_at P (S k).
   Proof.
-    intros K K' P P' Hr;
-      induction Hr as [| Pa Pa' Qb Hr IH | Pa Qb Qb' Hr IH]; intro k;
-      cbn [phase_at].
+    intros oa P P' H; induction H; intro k; cbn [phase_at].
+    - reflexivity.
     - rewrite !comm_leaf_comm_at_S; reflexivity.
-    - rewrite IH; reflexivity.
-    - rewrite IH; reflexivity.
+    - rewrite IHcomm_sel1, IHcomm_sel2; reflexivity.
+    - rewrite IHcomm_sel1, IHcomm_sel2; reflexivity.
   Qed.
 
-  Lemma replace_leaf_parties : forall a b P P' d, replace_leaf a b P P' ->
-      (In d (comp_chan b) <-> In d (comp_chan a)) ->
-      parties P' d = parties P d.
+  Lemma comm_sel_parties : forall oa P P' a d, comm_sel oa P P' ->
+      oa = Some a -> d <> caction_chan a -> parties P' d = parties P d.
   Proof.
-    intros a b P P' d Hr Hiff;
-      induction Hr as [| Pa Pa' Qb Hr IH | Pa Qb Qb' Hr IH].
-    - apply parties_leaf_eq, Hiff.
-    - simpl; rewrite IH; reflexivity.
-    - simpl; rewrite IH; reflexivity.
+    intros oa P P' a d H; induction H; intros Ha Hne; try discriminate.
+    - injection Ha as ->. apply parties_leaf_eq.
+      apply (comm_leaf_chan_iff _ _ _ _ H Hne).
+    - rewrite <- (comm_sel_none_eq _ _ _ H0 eq_refl).
+      cbn [parties]; rewrite (IHcomm_sel1 Ha Hne); reflexivity.
+    - rewrite <- (comm_sel_none_eq _ _ _ H eq_refl).
+      cbn [parties]; rewrite (IHcomm_sel2 Ha Hne); reflexivity.
   Qed.
 
 
@@ -1324,14 +1333,6 @@ Section SoundnessFacts.
     apply (Permutation_in _
              (Permutation_sym (permutation_flat_map _ _ f _ _ Hp))).
     simpl. apply in_or_app; right. apply in_or_app; right. exact Hy.
-  Qed.
-
-  Lemma comm_leaf_chan_iff : forall K a K' d,
-      selects K a K' -> d <> caction_chan a ->
-      (In d (comp_chan (comp_comm K')) <-> In d (comp_chan (comp_comm K))).
-  Proof.
-    intros K a K' d Hs Hne. unfold comp_chan. rewrite !comm_leaf_chan.
-    apply (selects_chan_iff _ _ _ _ Hs Hne).
   Qed.
 
 

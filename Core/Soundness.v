@@ -92,12 +92,10 @@ Section Soundness.
          Lemma 2 commutes the selected rendezvous first. *)
   Lemma comm_select_sound :
     forall (Q R : assertion dim) (PK P1 PK' : program)
-           (Ki Ki' Kj Kj' : cblock) (c : chan) (e : expr) (x : var),
+           (c : chan) (e : expr) (x : var),
       wf_program PK ->
-      replace_leaf (comp_comm Ki) (comp_comm Ki') PK P1 ->
-      replace_leaf (comp_comm Kj) (comp_comm Kj') P1 PK' ->
-      selects Ki (c_send c e) Ki' ->
-      selects Kj (c_recv c x) Kj' ->
+      PK ∋ₖ c_send c e □ P1 ->
+      P1 ∋ₖ c_recv c x □ PK' ->
       Σ ⊨ {{ Q }} PK' {{ R }} ->
       Σ ⊨ {{ assertion_subst Q x e }} PK {{ R }}.
   Admitted.
@@ -157,40 +155,28 @@ Section Soundness.
   (** ** Well-formedness is inherited by the sub-programs appearing in rule
          premises — needed to thread [wf_program] through the induction. *)
   Lemma wf_comm_select_residual :
-    forall (PK P1 PK' : program) (Ki Ki' Kj Kj' : cblock)
-           (c : chan) (e : expr) (x : var),
+    forall (PK P1 PK' : program) (c : chan) (e : expr) (x : var),
       wf_program PK ->
-      replace_leaf (comp_comm Ki) (comp_comm Ki') PK P1 ->
-      replace_leaf (comp_comm Kj) (comp_comm Kj') P1 PK' ->
-      selects Ki (c_send c e) Ki' ->
-      selects Kj (c_recv c x) Kj' ->
+      PK ∋ₖ c_send c e □ P1 ->
+      P1 ∋ₖ c_recv c x □ PK' ->
       wf_program PK'.
   Proof.
-    intros PK P1 PK' Ki Ki' Kj Kj' c e x (Hown & Hch & Hal & Hind) Hr1 Hr2 Hs1 Hs2.
-    destruct (comm_leaf_footprint_incl _ _ _ Hs1) as (C1 & V1 & Q1).
-    destruct (comm_leaf_footprint_incl _ _ _ Hs2) as (C2 & V2 & Q2).
-    (* PK's actions lose the send, then the recv *)
-    destruct (replace_leaf_actions _ _ _ _ _ Hr1 Hs1) as (r1 & A1 & A1').
-    destruct (replace_leaf_actions _ _ _ _ _ Hr2 Hs2) as (r2 & A2 & A2').
+    intros PK P1 PK' c e x (Hown & Hch & Hal & Hind) Hr1 Hr2.
+    (* the phase's actions lose the send, then the recv *)
     assert (HPK : Permutation (program_actions PK)
                     (c_send c e :: c_recv c x :: program_actions PK')).
-    { eapply Permutation_trans; [exact A1 |]. apply perm_skip.
-      eapply Permutation_trans; [apply Permutation_sym, A1' |].
-      eapply Permutation_trans; [exact A2 |].
-      apply perm_skip, Permutation_sym, A2'. }
-    (* and so does phase 0, where both endpoints live *)
-    destruct (replace_leaf_phase0 _ _ _ _ _ Hr1 Hs1) as (q1 & F1 & F1').
-    destruct (replace_leaf_phase0 _ _ _ _ _ Hr2 Hs2) as (q2 & F2 & F2').
+    { eapply Permutation_trans;
+        [ apply (comm_sel_actions _ _ _ _ Hr1 eq_refl)
+        | apply perm_skip, (comm_sel_actions _ _ _ _ Hr2 eq_refl) ]. }
+    (* a phase's endpoints all live in phase 0, which loses the same two *)
     assert (HPH : Permutation (concat (phase_at PK 0%nat))
                     (c_send c e :: c_recv c x :: concat (phase_at PK' 0%nat))).
-    { eapply Permutation_trans; [exact F1 |]. apply perm_skip.
-      eapply Permutation_trans; [apply Permutation_sym, F1' |].
-      eapply Permutation_trans; [exact F2 |].
-      apply perm_skip, Permutation_sym, F2'. }
-    (* later phases are untouched *)
+    { eapply Permutation_trans;
+        [ apply (comm_sel_phase0 _ _ _ _ Hr1 eq_refl)
+        | apply perm_skip, (comm_sel_phase0 _ _ _ _ Hr2 eq_refl) ]. }
     assert (HL : forall k, phase_at PK' (S k) = phase_at PK (S k)).
-    { intro k. rewrite (replace_leaf_phase_later _ _ _ _ Hr2 k).
-      apply (replace_leaf_phase_later _ _ _ _ Hr1 k). }
+    { intro k. rewrite (comm_sel_phase_later _ _ _ Hr2 k).
+      apply (comm_sel_phase_later _ _ _ Hr1 k). }
     (* c had exactly two endpoints in PK and we consumed both, so c is gone *)
     assert (HinPKc : In c (program_chan PK)).
     { rewrite program_chan_actions. apply (in_map caction_chan _ (c_send c e)).
@@ -214,10 +200,9 @@ Section Soundness.
                     (Nat.eqb_refl c) (Nat.eqb_refl c)) as Hcnt.
       apply length_zero_iff_nil. rewrite HAL in Hcnt. lia. }
     split; [| split; [| split]].
-    - (* ownership: both replacements only shrink footprints *)
-      eapply replace_leaf_ownership; [exact Hr2 | exact C2 | exact V2 | exact Q2 |].
-      eapply replace_leaf_ownership; [exact Hr1 | exact C1 | exact V1 | exact Q1 |].
-      exact Hown.
+    - (* ownership: consuming an endpoint only shrinks footprints *)
+      eapply comm_sel_ownership; [exact Hr2 |].
+      eapply comm_sel_ownership; [exact Hr1 | exact Hown].
     - (* channels *)
       intros d Hd.
       assert (HdPK : In d (program_chan PK)).
@@ -240,10 +225,8 @@ Section Soundness.
       + rewrite <- (Permutation_length
                       (permutation_filter _ (fun a => negb (is_send a)) _ _ Hperm)).
         exact Hrd.
-      + rewrite (replace_leaf_parties _ _ _ _ _ Hr2
-                   (comm_leaf_chan_iff _ _ _ _ Hs2 Hdc)).
-        rewrite (replace_leaf_parties _ _ _ _ _ Hr1
-                   (comm_leaf_chan_iff _ _ _ _ Hs1 Hdc)).
+      + rewrite (comm_sel_parties _ _ _ _ _ Hr2 eq_refl Hdc).
+        rewrite (comm_sel_parties _ _ _ _ _ Hr1 eq_refl Hdc).
         exact Hpd.
     - (* alignment *)
       intros k d Hd. destruct k as [| k]; unfold phase_actions in *.
@@ -427,11 +410,9 @@ Section Soundness.
       (Hpd : forall Q R PD Dseq,
           locals_seq PD Dseq -> Σ ⊢ₗ {{ Q }} Dseq {{ R }} -> Pr Q PD R)
       (Hcd : forall Q PK, all_comm_done PK -> Pr Q PK Q)
-      (Hcs : forall Q R PK P1 PK' Ki Ki' Kj Kj' c e x,
-          replace_leaf (comp_comm Ki) (comp_comm Ki') PK P1 ->
-          replace_leaf (comp_comm Kj) (comp_comm Kj') P1 PK' ->
-          selects Ki (c_send c e) Ki' ->
-          selects Kj (c_recv c x) Kj' ->
+      (Hcs : forall Q R PK P1 PK' c e x,
+          PK ∋ₖ c_send c e □ P1 ->
+          P1 ∋ₖ c_recv c x □ PK' ->
           Σ ⊢ₚ {{ Q }} PK' {{ R }} -> Pr Q PK' R ->
           Pr (assertion_subst Q x e) PK R)
       (Hpc : forall Q0 Q1 Q2 Q3 PD PK PT P,
@@ -459,8 +440,8 @@ Section Soundness.
     match d with
     | rule_par_disjoint _ Q R PD Dseq h1 h2 => Hpd Q R PD Dseq h1 h2
     | rule_comm_done _ Q PK h => Hcd Q PK h
-    | rule_comm_select _ Q R PK P1 PK' Ki Ki' Kj Kj' c e x h1 h2 h3 h4 d' =>
-        Hcs Q R PK P1 PK' Ki Ki' Kj Kj' c e x h1 h2 h3 h4 d' (rec _ _ _ d')
+    | rule_comm_select _ Q R PK P1 PK' c e x h1 h2 d' =>
+        Hcs Q R PK P1 PK' c e x h1 h2 d' (rec _ _ _ d')
     | rule_par_comp _ Q0 Q1 Q2 Q3 PD PK PT P h1 h2 d1 d2 d3 =>
         Hpc Q0 Q1 Q2 Q3 PD PK PT P h1 h2
             d1 (rec _ _ _ d1) d2 (rec _ _ _ d2) d3 (rec _ _ _ d3)
@@ -508,7 +489,7 @@ Section Soundness.
       - (* Comm-Done *)
         intros q pk Hacd Hwf. apply comm_done_sound; assumption.
       - (* Comm-Select-MP *)
-        intros q r pk p1 pk' ki ki' kj kj' ch ex xv Hrl1 Hrl2 Hs1 Hs2 Hd0 IH Hwf.
+        intros q r pk p1 pk' ch ex xv Hcs1 Hcs2 Hd0 IH Hwf.
         eapply comm_select_sound; try eassumption.
         apply IH. eapply wf_comm_select_residual; eassumption.
       - (* Par-Comp-MP *)

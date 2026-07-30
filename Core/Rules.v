@@ -105,6 +105,7 @@ where "Σ '⊢ₗ' '{{' Pre '}}' L '{{' Post '}}'" := (local_derivable Σ Pre L 
 
       D₁‖…‖D_N      locals_seq   (with its left-to-right sequentialisation)
       ε_K‖…‖ε_K     all_comm_done
+      K₁‖…‖K_N      comm_sel     (one endpoint consumed)
       (Dᵢ;Kᵢ;Tᵢ)‖…  zip3 of the D-, K- and T-rows
 *********************************************************************)
 
@@ -121,6 +122,28 @@ Inductive all_comm_done : program -> Prop :=
     all_comm_done P1 ->
     all_comm_done P2 ->
     all_comm_done (pg_par P1 P2).
+
+(** Selecting one endpoint out of a communication phase K₁‖…‖K_N.
+    Same skeleton as [zip3]: the two rows are related LEAF BY LEAF, so every
+    leaf is forced to be a bare communication block.  [zip3] treats all leaves
+    alike; here exactly ONE leaf must lose an endpoint, and the [option] index
+    is what tells the two leaf behaviours apart — [None] keeps the leaf,
+    [Some a] drops the endpoint a from it. **)
+Inductive comm_sel : option caction -> program -> program -> Prop :=
+| csel_keep  : forall K, comm_sel None (⟨ₖ K ⟩) (⟨ₖ K ⟩)
+| csel_drop  : forall a K K',
+    selects K a K' -> comm_sel (Some a) (⟨ₖ K ⟩) (⟨ₖ K' ⟩)
+| csel_par_l : forall oa P1 P1' P2 P2',
+    comm_sel oa P1 P1' -> comm_sel None P2 P2' ->
+    comm_sel oa (pg_par P1 P2) (pg_par P1' P2')
+| csel_par_r : forall oa P1 P1' P2 P2',
+    comm_sel None P1 P1' -> comm_sel oa P2 P2' ->
+    comm_sel oa (pg_par P1 P2) (pg_par P1' P2').
+
+(** The row-level companion of Semantics' block-level [K ∋ a □ K']: the phase
+    ⟨ₖ K₁⟩ ∥ … ∥ ⟨ₖ K_N⟩ exposes the endpoint a, with residual phase PK'. **)
+Notation "PK '∋ₖ' a '□' PK'" := (comm_sel (Some a) PK PK')
+  (at level 70, a at level 60).
 
 (** The D-, K- and T-rows have the same tree shape and zip leafwise into
     the program of phases. **)
@@ -168,13 +191,11 @@ Inductive derivable {dim} (Σ : interp dim)
 | rule_comm_done : forall Q PK,
     all_comm_done PK ->
     Σ ⊢ₚ {{ Q }} PK {{ Q }}
-(* Comm-Select-MP: consume one matched endpoint from the sender leaf and
-   the receiver leaf, in place. *)
-| rule_comm_select : forall Q R PK P1 PK' Ki Ki' Kj Kj' c e x,
-    replace_leaf (comp_comm Ki) (comp_comm Ki') PK P1 ->
-    replace_leaf (comp_comm Kj) (comp_comm Kj') P1 PK' ->
-    selects Ki (c_send c e) Ki' ->
-    selects Kj (c_recv c x) Kj' ->
+(* Comm-Select-MP: consume one matched pair out of the current communication
+   phase (p.15).  [comm_sel] matches the phase leaf by leaf, as [zip3] does. *)
+| rule_comm_select : forall Q R PK P1 PK' c e x,
+    PK ∋ₖ c_send c e □ P1 ->
+    P1 ∋ₖ c_recv c x □ PK' ->
     Σ ⊢ₚ {{ Q }} PK' {{ R }} ->
     Σ ⊢ₚ {{ assertion_subst Q x e }} PK {{ R }}
 (* Par-Comp-MP.  [wf_program] is the paper's "rule instances range over
