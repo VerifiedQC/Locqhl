@@ -41,4 +41,5 @@ Core/Assertions.v
 Core/TraceFacts.v
 Core/Rules.v
 Core/WellFormed.v
+Core/SoundnessFacts.v
 Core/Soundness.v

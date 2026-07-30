@@ -104,6 +104,23 @@ Definition comp_cvar   (C : component) : list var  := process_cvar   (read_compo
 Definition comp_qvar   (C : component) : list qvar := process_qvar   (read_component C).
 Definition comp_chan   (C : component) : list chan := process_chan   (read_component C).
 
+(** A bare communication leaf reads as ↓;K;↓, so its footprints are K's. **)
+Lemma comm_leaf_change : forall K,
+    process_change (read_component (comp_comm K)) = cblock_change K.
+Proof. destruct K; simpl; rewrite ?app_nil_r; reflexivity. Qed.
+
+Lemma comm_leaf_read : forall K,
+    process_read (read_component (comp_comm K)) = cblock_read K.
+Proof. destruct K; simpl; rewrite ?app_nil_r; reflexivity. Qed.
+
+Lemma comm_leaf_qvar : forall K,
+    process_qvar (read_component (comp_comm K)) = [].
+Proof. destruct K; reflexivity. Qed.
+
+Lemma comm_leaf_chan : forall K,
+    process_chan (read_component (comp_comm K)) = cblock_chan K.
+Proof. destruct K; simpl; rewrite ?app_nil_r; reflexivity. Qed.
+
 (** ** Footprints of a program ** **)
 Fixpoint program_change (P : program) : list var :=
   match P with
@@ -190,6 +207,19 @@ Fixpoint program_actions (P : program) : list caction :=
   | pg_par P1 P2 => program_actions P1 ++ program_actions P2
   end.
 
+(** A bare communication leaf exposes K as its phase 0 and nothing after. **)
+Lemma comm_leaf_actions : forall K,
+    process_actions (read_component (comp_comm K)) = K.
+Proof. destruct K; simpl; rewrite ?app_nil_r; reflexivity. Qed.
+
+Lemma comm_leaf_comm_at0 : forall K,
+    comm_at (read_component (comp_comm K)) 0 = K.
+Proof. destruct K; reflexivity. Qed.
+
+Lemma comm_leaf_comm_at_S : forall K k,
+    comm_at (read_component (comp_comm K)) (S k) = [].
+Proof. destruct K; reflexivity. Qed.
+
 (** Logical channels: every channel carries exactly one output and one
     input endpoint, in two distinct leaves. **)
 Definition endpoints_of (P : program) (c : chan) : list caction :=
@@ -200,6 +230,17 @@ Definition wf_channels (P : program) : Prop :=
     length (filter is_send (endpoints_of P c)) = 1
     /\ length (filter (fun a => negb (is_send a)) (endpoints_of P c)) = 1
     /\ parties P c = 2.
+
+(** Phase alignment: a channel's two endpoints occur in the SAME padded
+    communication phase.  With [wf_channels] pinning the whole tree to two
+    endpoint occurrences per channel, "this phase holds two of them" says
+    exactly that both live here.  **)
+Definition phase_actions (P : program) (k : nat) : list caction :=
+  concat (phase_at P k).
+
+Definition wf_phase_aligned (P : program) : Prop :=
+  forall k c, In c (map caction_chan (phase_actions P k)) ->
+    length (filter (fun a => Nat.eqb (caction_chan a) c) (phase_actions P k)) = 2.
 
 (** Same-phase communication independence: within one padded phase the
     receive targets are pairwise distinct and none of them is read by an
@@ -212,9 +253,144 @@ Definition wf_phase_independence (P : program) : Prop :=
     NoDup (recv_targets (phase_at P k))
     /\ disjoint (recv_targets (phase_at P k)) (output_reads (phase_at P k)).
 
-(** A well-formed LOCC distributed program. **)
+(** Both phase footprints factor through [phase_actions]: flattening the
+    blocks first and then reading each action is the same traversal. **)
+Lemma flat_map_concat_flat : forall {A B} (f : A -> list B) (l : list (list A)),
+    flat_map (fun x => flat_map f x) l = flat_map f (concat l).
+Proof.
+  induction l as [| a l IH]; simpl; [reflexivity |].
+  rewrite flat_map_app, IH; reflexivity.
+Qed.
+
+Lemma recv_targets_concat : forall Ks,
+    recv_targets Ks = flat_map caction_change (concat Ks).
+Proof. intro Ks. apply (flat_map_concat_flat caction_change Ks). Qed.
+
+Lemma output_reads_concat : forall Ks,
+    output_reads Ks = flat_map caction_read (concat Ks).
+Proof. intro Ks. apply (flat_map_concat_flat caction_read Ks). Qed.
+
+(** Channels are the channel names of the actions — [process_chan] and
+    [program_chan] are [caction_chan] read off [process_actions]. **)
+Lemma process_chan_actions : forall p,
+    process_chan p = map caction_chan (process_actions p).
+Proof.
+  induction p as [| R K p' IH]; simpl; [reflexivity |].
+  rewrite map_app, IH; reflexivity.
+Qed.
+
+Lemma program_chan_actions : forall P,
+    program_chan P = map caction_chan (program_actions P).
+Proof.
+  induction P as [C | P1 IH1 P2 IH2]; simpl.
+  - unfold comp_chan. apply process_chan_actions.
+  - rewrite map_app, IH1, IH2; reflexivity.
+Qed.
+
+(** "No endpoint on c" as a filter and as a membership. **)
+Lemma filter_chan_nil_iff : forall c l,
+    filter (fun a => Nat.eqb (caction_chan a) c) l = nil <-> ~ In c (map caction_chan l).
+Proof.
+  intros c l; induction l as [| a l IH]; simpl.
+  - split; [intros _ [] | reflexivity].
+  - destruct (Nat.eqb (caction_chan a) c) eqn:Hc.
+    + apply Nat.eqb_eq in Hc. split; [discriminate |].
+      intro H; exfalso; apply H; left; exact Hc.
+    + apply Nat.eqb_neq in Hc. rewrite IH.
+      split; intros H Hin; [| apply H].
+      * destruct Hin as [Heq | Hin]; [exact (Hc Heq) | exact (H Hin)].
+      * right; exact Hin.
+Qed.
+
+Lemma filter_chan_nonnil_in : forall (c : chan) (l : list caction),
+    filter (fun a => Nat.eqb (caction_chan a) c) l <> [] ->
+    In c (map caction_chan l).
+Proof.
+  intros c l H.
+  destruct (filter (fun a => Nat.eqb (caction_chan a) c) l) as [| a rest] eqn:Ef;
+    [exfalso; exact (H eq_refl) |].
+  assert (Hain : In a (filter (fun a0 => Nat.eqb (caction_chan a0) c) l))
+    by (rewrite Ef; left; reflexivity).
+  apply filter_In in Hain as [HinL Hchan].
+  apply Nat.eqb_eq in Hchan. rewrite <- Hchan. apply in_map, HinL.
+Qed.
+
+Lemma filter_length_split : forall {A} (f : A -> bool) (l : list A),
+    length l = length (filter f l) + length (filter (fun x => negb (f x)) l).
+Proof.
+  induction l as [| a l IH]; simpl; [reflexivity |].
+  destruct (f a); simpl; rewrite IH;
+    [reflexivity | symmetry; apply Nat.add_succ_r].
+Qed.
+
+Lemma filter_filter_and : forall {A} (f g : A -> bool) (l : list A),
+    filter f (filter g l) = filter (fun x => andb (g x) (f x)) l.
+Proof.
+  induction l as [| a l IH]; simpl; [reflexivity |].
+  destruct (g a); simpl; [destruct (f a) | ]; rewrite IH; reflexivity.
+Qed.
+
+Lemma existsb_eqb_true_iff : forall (c : chan) (l : list chan),
+    existsb (Nat.eqb c) l = true <-> In c l.
+Proof.
+  intros c l; induction l as [| a l IH]; simpl.
+  - split; [discriminate | intros []].
+  - rewrite Bool.orb_true_iff, IH, Nat.eqb_eq.
+    split; (intros [H | H]; [left | right]); auto.
+Qed.
+
+(** A leaf's party count only depends on whether it mentions c at all. **)
+Lemma parties_leaf_eq : forall (C1 C2 : component) (c : chan),
+    (In c (comp_chan C1) <-> In c (comp_chan C2)) ->
+    parties (pg_comp C1) c = parties (pg_comp C2) c.
+Proof.
+  intros C1 C2 c Hiff. cbn [parties].
+  match goal with
+  | |- (if ?b1 then _ else _) = (if ?b2 then _ else _) =>
+      destruct b1 eqn:E1; destruct b2 eqn:E2
+  end; try reflexivity; exfalso.
+  - apply (proj1 (existsb_eqb_true_iff c (comp_chan C1))) in E1.
+    apply Hiff in E1.
+    apply (proj2 (existsb_eqb_true_iff c (comp_chan C2))) in E1.
+    rewrite E1 in E2; discriminate.
+  - apply (proj1 (existsb_eqb_true_iff c (comp_chan C2))) in E2.
+    apply Hiff in E2.
+    apply (proj2 (existsb_eqb_true_iff c (comp_chan C1))) in E2.
+    rewrite E2 in E1; discriminate.
+Qed.
+
+(** So when the OTHER row's part of a leaf is c-free, the two readings of that
+    leaf count c the same. **)
+Lemma comm_leaf_parties : forall (K : cblock) (T : process) (D : lblock) (c : chan),
+    ~ In c (process_chan T) ->
+    parties (pg_comp (comp_comm K)) c
+    = parties (pg_comp (comp_proc (phase (r_more D) K T))) c.
+Proof.
+  intros K T D c HT. apply parties_leaf_eq.
+  unfold comp_chan. rewrite comm_leaf_chan.
+  change (process_chan (read_component (comp_proc (phase (r_more D) K T))))
+    with (cblock_chan K ++ process_chan T).
+  split; [intro H; apply in_or_app; left; exact H |].
+  intro H; apply in_app_or in H as [H | H]; [exact H | exfalso; exact (HT H)].
+Qed.
+
+Lemma tail_leaf_parties : forall (K : cblock) (T : process) (D : lblock) (c : chan),
+    ~ In c (cblock_chan K) ->
+    parties (pg_comp (comp_proc T)) c
+    = parties (pg_comp (comp_proc (phase (r_more D) K T))) c.
+Proof.
+  intros K T D c HK. apply parties_leaf_eq.
+  unfold comp_chan.
+  change (process_chan (read_component (comp_proc T))) with (process_chan T).
+  change (process_chan (read_component (comp_proc (phase (r_more D) K T))))
+    with (cblock_chan K ++ process_chan T).
+  split; [intro H; apply in_or_app; right; exact H |].
+  intro H; apply in_app_or in H as [H | H]; [exfalso; exact (HK H) | exact H].
+Qed.
+
+(** A well-formed LOCC distributed program (Definition 2.1). **)
 Definition wf_program (P : program) : Prop :=
-  wf_ownership P /\ wf_channels P /\ wf_phase_independence P.
+  wf_ownership P /\ wf_channels P /\ wf_phase_aligned P /\ wf_phase_independence P.
 
 (** ** Theorem 2.1 — well-formedness implies disjoint local footprints ***
 
