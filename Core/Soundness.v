@@ -127,7 +127,32 @@ Section Soundness.
       ForallOrdPairs (exclusive Σ) (psi0 :: map snd fam) ->
       Σ ⊨ {{ mk_assertion phi (qsum A0 (map fst fam)) }} P
           {{ mk_assertion (fdisj psi0 (map snd fam)) B }}.
-  Admitted.
+  Proof.
+    intros phi B P A0 psi0 fam H0 Hfam Hex
+           s r HWFr Hherm Hpsd Hh Hdef E HTerm.
+    unfold defined_in, mk_assertion in Hdef;
+      cbn [quantum_part] in Hdef; destruct Hdef as (M & HM).
+    destruct (qsum_denote_parts Σ s A0 (map fst fam) M HM)
+      as ((M0 & HM0) & HAs).
+    (* the sum of pre-effects splits the precondition's degree *)
+    rewrite (degree_qsum Σ phi A0 (map fst fam) s r M HM).
+    (* mutually exclusive guards split the postcondition's degree *)
+    rewrite (total_degree_fdisj_exclusive Σ psi0 (map snd fam) B E Hex).
+    apply fold_right_Rplus_le.
+    - apply (H0 s r HWFr Hherm Hpsd Hh); [exists M0; exact HM0 | exact HTerm].
+    - (* the family, one member at a time; drop everything fam-dependent so
+         the induction hypothesis stays a plain implication *)
+      assert (Hphi : formula_holds Σ s phi = true)
+        by (unfold mk_assertion in Hh; cbn [classical_part] in Hh; exact Hh).
+      clear Hh Hex HM.
+      revert Hfam HAs; induction fam as [| Api fam IH];
+        intros Hfam HAs; cbn [map] in HAs |- *.
+      + constructor.
+      + constructor.
+        * apply (Forall_inv Hfam s r HWFr Hherm Hpsd Hphi
+                   (Forall_inv HAs) E HTerm).
+        * apply IH; [apply (Forall_inv_tail Hfam) | apply (Forall_inv_tail HAs)].
+  Qed.
 
   (** ** Well-formedness is inherited by the sub-programs appearing in rule
          premises — needed to thread [wf_program] through the induction. *)

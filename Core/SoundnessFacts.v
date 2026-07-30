@@ -1334,4 +1334,146 @@ Section SoundnessFacts.
     apply (selects_chan_iff _ _ _ _ Hs Hne).
   Qed.
 
+
+  (** ** Branch-Accum: finite additivity of the degree.
+         A sum of pre-effects splits the input degree; mutually exclusive
+         guards split the output degree. *)
+
+  Lemma qpred_add_defined : forall s A1 A2 M,
+      qpred_denote Σ s (q_add A1 A2) = Some M ->
+      exists M1 M2, qpred_denote Σ s A1 = Some M1
+                 /\ qpred_denote Σ s A2 = Some M2
+                 /\ M = (M1 .+ M2)%M.
+  Proof.
+    intros s A1 A2 M H. cbn [qpred_denote] in H.
+    destruct (qpred_denote Σ s A1) as [M1 |]; [| discriminate].
+    destruct (qpred_denote Σ s A2) as [M2 |]; [| discriminate].
+    injection H as H. exists M1, M2. repeat split. symmetry; exact H.
+  Qed.
+
+  Lemma qsum_denote_parts : forall s A0 As M,
+      qpred_denote Σ s (qsum A0 As) = Some M ->
+      (exists M0, qpred_denote Σ s A0 = Some M0)
+      /\ Forall (fun A => exists MA, qpred_denote Σ s A = Some MA) As.
+  Proof.
+    intros s A0 As; induction As as [| A As IH]; intros M HM.
+    - split; [exists M; exact HM | constructor].
+    - apply qpred_add_defined in HM as (M1 & M2 & HA & HQ & _).
+      destruct (IH _ HQ) as (H0 & HAs).
+      split; [exact H0 | constructor; [exists M1; exact HA | exact HAs]].
+  Qed.
+
+  Lemma degree_add : forall phi A1 A2 s (r : qstate dim),
+      (exists M, qpred_denote Σ s (q_add A1 A2) = Some M) ->
+      degree Σ (mk_assertion phi (q_add A1 A2)) (s, r)
+      = (degree Σ (mk_assertion phi A1) (s, r)
+         + degree Σ (mk_assertion phi A2) (s, r))%R.
+  Proof.
+    intros phi A1 A2 s r (M & HM).
+    pose proof (qpred_add_defined _ _ _ _ HM) as (M1 & M2 & H1 & H2 & Heq).
+    unfold degree, mk_assertion; cbn [classical_part quantum_part].
+    destruct (formula_holds Σ s phi); [| lra].
+    rewrite HM, H1, H2, Heq.
+    rewrite Mmult_plus_distr_r, trace_plus_dist, fst_Cplus. reflexivity.
+  Qed.
+
+  Lemma degree_qsum : forall phi A0 As s (r : qstate dim) M,
+      qpred_denote Σ s (qsum A0 As) = Some M ->
+      degree Σ (mk_assertion phi (qsum A0 As)) (s, r)
+      = fold_right Rplus (degree Σ (mk_assertion phi A0) (s, r))
+          (map (fun A => degree Σ (mk_assertion phi A) (s, r)) As).
+  Proof.
+    intros phi A0 As s r; induction As as [| A As IH]; intros M HM.
+    - reflexivity.
+    - pose proof (qpred_add_defined _ _ _ _ HM) as (M1 & M2 & H1 & H2 & _).
+      assert (Hex : exists M', qpred_denote Σ s (q_add A (qsum A0 As)) = Some M')
+        by (exists M; exact HM).
+      cbn [map fold_right].
+      change (qsum A0 (A :: As)) with (q_add A (qsum A0 As)).
+      rewrite (degree_add phi A (qsum A0 As) s r Hex).
+      rewrite (IH M2 H2). reflexivity.
+  Qed.
+
+  Lemma exclusive_sym : forall p q, exclusive Σ p q -> exclusive Σ q p.
+  Proof. intros p q H s Hq Hp. exact (H s Hp Hq). Qed.
+
+  Lemma formula_holds_fdisj : forall s psi0 ps,
+      formula_holds Σ s (fdisj psi0 ps) = true ->
+      formula_holds Σ s psi0 = true
+      \/ Exists (fun p => formula_holds Σ s p = true) ps.
+  Proof.
+    intros s psi0 ps; induction ps as [| p ps IH]; cbn [fdisj fold_right]; intro H.
+    - left; exact H.
+    - cbn [formula_holds] in H. apply Bool.orb_true_iff in H as [H | H].
+      + right; constructor; exact H.
+      + destruct (IH H) as [H' | H'];
+          [left; exact H' | right; apply Exists_cons_tl, H'].
+  Qed.
+
+  Lemma exclusive_fdisj : forall p psi0 ps,
+      exclusive Σ p psi0 -> Forall (exclusive Σ p) ps ->
+      exclusive Σ p (fdisj psi0 ps).
+  Proof.
+    intros p psi0 ps H0 Hps s Hp Hd.
+    apply formula_holds_fdisj in Hd as [Hd | Hd].
+    - exact (H0 s Hp Hd).
+    - rewrite Forall_forall in Hps. apply Exists_exists in Hd as (q & Hq & Hqh).
+      exact (Hps q Hq s Hp Hqh).
+  Qed.
+
+  Lemma degree_or_exclusive : forall p q B st,
+      exclusive Σ p q ->
+      degree Σ (mk_assertion (f_or p q) B) st
+      = (degree Σ (mk_assertion p B) st + degree Σ (mk_assertion q B) st)%R.
+  Proof.
+    intros p q B [s r] Hex.
+    unfold degree, mk_assertion; cbn [classical_part quantum_part formula_holds].
+    destruct (formula_holds Σ s p) eqn:Hp; destruct (formula_holds Σ s q) eqn:Hq;
+      cbn [orb].
+    - exfalso; exact (Hex s Hp Hq).
+    - destruct (qpred_denote Σ s B); lra.
+    - destruct (qpred_denote Σ s B); lra.
+    - lra.
+  Qed.
+
+  Lemma total_degree_or_exclusive : forall p q B E,
+      exclusive Σ p q ->
+      total_degree Σ (mk_assertion (f_or p q) B) E
+      = (total_degree Σ (mk_assertion p B) E
+         + total_degree Σ (mk_assertion q B) E)%R.
+  Proof.
+    intros p q B E Hex. unfold total_degree.
+    induction E as [| st E IH]; cbn [fold_right map]; [lra |].
+    rewrite (degree_or_exclusive p q B st Hex), IH. lra.
+  Qed.
+
+  Lemma total_degree_fdisj_exclusive : forall psi0 ps B E,
+      ForallOrdPairs (exclusive Σ) (psi0 :: ps) ->
+      total_degree Σ (mk_assertion (fdisj psi0 ps) B) E
+      = fold_right Rplus (total_degree Σ (mk_assertion psi0 B) E)
+          (map (fun p => total_degree Σ (mk_assertion p B) E) ps).
+  Proof.
+    intros psi0 ps B E; revert psi0;
+      induction ps as [| p ps IH]; intros psi0 Hex.
+    - reflexivity.
+    - inversion Hex as [| ? ? Hhd Htl]; subst.
+      inversion Htl as [| ? ? Hhd2 Htl2]; subst.
+      inversion Hhd as [| ? ? Hp0 Hps0]; subst.
+      assert (Hep : exclusive Σ p (fdisj psi0 ps))
+        by (apply exclusive_fdisj; [apply exclusive_sym, Hp0 | exact Hhd2]).
+      change (fdisj psi0 (p :: ps)) with (f_or p (fdisj psi0 ps)).
+      rewrite (total_degree_or_exclusive p (fdisj psi0 ps) B E Hep).
+      cbn [map fold_right].
+      assert (Hrec : ForallOrdPairs (exclusive Σ) (psi0 :: ps))
+        by (constructor; [exact Hps0 | exact Htl2]).
+      rewrite (IH psi0 Hrec). reflexivity.
+  Qed.
+
+  Lemma fold_right_Rplus_le : forall (l1 l2 : list R) (b1 b2 : R),
+      b1 <= b2 -> Forall2 Rle l1 l2 ->
+      fold_right Rplus b1 l1 <= fold_right Rplus b2 l2.
+  Proof.
+    intros l1 l2 b1 b2 Hb H; induction H; cbn [fold_right]; [exact Hb | lra].
+  Qed.
+
 End SoundnessFacts.
