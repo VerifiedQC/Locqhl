@@ -1477,4 +1477,515 @@ Section SoundnessFacts.
     intros l1 l2 b1 b2 Hb H; induction H; cbn [fold_right]; [exact Hb | lra].
   Qed.
 
+
+  (** ** Comm-Select-MP, step 1: a communication phase only rendezvouses.
+
+      Stepping turns a ⟨ₖ K ⟩ leaf into [comp_proc (advance ↓ K' ↓)] — a
+      different component with the SAME reading — so the runtime invariant is
+      stated on the reading, as [leaf_shape] is. *)
+
+  Definition comm_leafy (C : component) : Prop :=
+    read_component C = terminated
+    \/ exists K, K <> nil /\ read_component C = phase r_done K terminated.
+
+  Fixpoint comm_shape (P : program) : Prop :=
+    match P with
+    | pg_comp C    => comm_leafy C
+    | pg_par P1 P2 => comm_shape P1 /\ comm_shape P2
+    end.
+
+  Lemma comm_leafy_comm : forall K, comm_leafy (comp_comm K).
+  Proof.
+    destruct K as [| a K]; [left; reflexivity |].
+    right; exists (a :: K); split; [discriminate | reflexivity].
+  Qed.
+
+  Lemma comm_sel_shape : forall oa P P',
+      comm_sel oa P P' -> comm_shape P /\ comm_shape P'.
+  Proof.
+    intros oa P P' H; induction H; simpl.
+    - split; apply comm_leafy_comm.
+    - split; apply comm_leafy_comm.
+    - destruct IHcomm_sel1, IHcomm_sel2; split; split; assumption.
+    - destruct IHcomm_sel1, IHcomm_sel2; split; split; assumption.
+  Qed.
+
+  Lemma replace_leaf_in_shape : forall a b P P',
+      replace_leaf a b P P' -> comm_shape P -> comm_leafy a.
+  Proof.
+    intros a b P P' H; induction H; simpl.
+    - intro Hc; exact Hc.
+    - intros (H1 & _); apply IHreplace_leaf, H1.
+    - intros (_ & H2); apply IHreplace_leaf, H2.
+  Qed.
+
+  Lemma replace_leaf_keeps_shape : forall a b P P',
+      replace_leaf a b P P' -> comm_leafy b -> comm_shape P -> comm_shape P'.
+  Proof.
+    intros a b P P' H Hb; induction H; simpl.
+    - intros _; exact Hb.
+    - intros (H1 & H2); split; [apply IHreplace_leaf, H1 | exact H2].
+    - intros (H1 & H2); split; [exact H1 | apply IHreplace_leaf, H2].
+  Qed.
+
+  (** The rendezvous residual of a comm leaf is again one. *)
+  Lemma advance_done_comm_leafy : forall K',
+      comm_leafy (comp_proc (advance r_done K' terminated)).
+  Proof.
+    destruct K' as [| a K']; [left; reflexivity |].
+    right; exists (a :: K'); split; [discriminate | reflexivity].
+  Qed.
+
+  (** The structural heart: one step of a communication phase is one
+      rendezvous — a SINGLE branch whose ensemble is the input mapped by the
+      classical update x := e, with the residual still a phase. *)
+  Lemma comm_shape_step : forall P E G,
+      comm_shape P -> Σ ⊳ ‹ P, E › ⇝ G ->
+      exists P' (e : expr) (x : var),
+        G = {|| P', map (fun '(s,r) =>
+                          (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E ||}
+        /\ comm_shape P'.
+  Proof.
+    intros P E G Hsh Hstep; induction Hstep.
+    - (* ds_local — impossible: a phase leaf has no local block left *)
+      exfalso. simpl in Hsh. destruct Hsh as [Ht | (K0 & _ & Ht)];
+        rewrite H in Ht; discriminate.
+    - (* ds_par_l *)
+      simpl in Hsh. destruct Hsh as (H1 & H2).
+      destruct (IHHstep H1) as (P1' & e & x & -> & Hs1).
+      exists (pg_par P1' P2), e, x. split; [reflexivity | split; assumption].
+    - (* ds_par_r *)
+      simpl in Hsh. destruct Hsh as (H1 & H2).
+      destruct (IHHstep H2) as (P2' & e & x & -> & Hs2).
+      exists (pg_par P1 P2'), e, x. split; [reflexivity | split; assumption].
+    - (* ds_comm_lr *)
+      simpl in Hsh. destruct Hsh as (Hs1 & Hs2).
+      pose proof (replace_leaf_in_shape _ _ _ _ H3 Hs1) as HCs.
+      pose proof (replace_leaf_in_shape _ _ _ _ H4 Hs2) as HCr.
+      destruct HCs as [Ht | (K0 & _ & Ht)]; rewrite H in Ht; [discriminate |].
+      injection Ht as _ ->.
+      destruct HCr as [Ht' | (K1 & _ & Ht')]; rewrite H0 in Ht'; [discriminate |].
+      injection Ht' as _ ->.
+      exists (pg_par P1' P2'), e, x. split; [reflexivity |]. split.
+      + eapply replace_leaf_keeps_shape;
+          [exact H3 | apply advance_done_comm_leafy | exact Hs1].
+      + eapply replace_leaf_keeps_shape;
+          [exact H4 | apply advance_done_comm_leafy | exact Hs2].
+    - (* ds_comm_rl *)
+      simpl in Hsh. destruct Hsh as (Hs1 & Hs2).
+      pose proof (replace_leaf_in_shape _ _ _ _ H4 Hs1) as HCr.
+      pose proof (replace_leaf_in_shape _ _ _ _ H3 Hs2) as HCs.
+      destruct HCs as [Ht | (K0 & _ & Ht)]; rewrite H in Ht; [discriminate |].
+      injection Ht as _ ->.
+      destruct HCr as [Ht' | (K1 & _ & Ht')]; rewrite H0 in Ht'; [discriminate |].
+      injection Ht' as _ ->.
+      exists (pg_par P1' P2'), e, x. split; [reflexivity |]. split.
+      + eapply replace_leaf_keeps_shape;
+          [exact H4 | apply advance_done_comm_leafy | exact Hs1].
+      + eapply replace_leaf_keeps_shape;
+          [exact H3 | apply advance_done_comm_leafy | exact Hs2].
+  Qed.
+
+
+  (** ** Comm-Select-MP, step 2: a communication phase always makes progress,
+         and every rendezvous shortens it. *)
+
+  Lemma phase_leaf_actions : forall C K,
+      read_component C = phase r_done K terminated ->
+      process_actions (read_component C) = K.
+  Proof. intros C K H; rewrite H; cbn; apply app_nil_r. Qed.
+
+  Lemma advance_done_actions : forall K',
+      process_actions (advance r_done K' terminated) = K'.
+  Proof. destruct K'; cbn; rewrite ?app_nil_r; reflexivity. Qed.
+
+  (** Any exposed endpoint can be located: which leaf holds it, and what the
+      leaf becomes once it is consumed. *)
+  Lemma comm_shape_locate : forall P a,
+      comm_shape P -> In a (program_actions P) ->
+      exists C K K' P',
+        read_component C = phase r_done K terminated
+        /\ selects K a K'
+        /\ replace_leaf C (comp_proc (advance r_done K' terminated)) P P'.
+  Proof.
+    induction P as [C | P1 IH1 P2 IH2]; intros a Hsh Hin.
+    - destruct Hsh as [Ht | (K & _ & Ht)];
+        cbn [program_actions] in Hin; rewrite Ht in Hin; cbn in Hin;
+        [destruct Hin |].
+      rewrite app_nil_r in Hin. apply in_split in Hin as (pre & post & ->).
+      exists C, (pre ++ a :: post), (pre ++ post), (pg_comp (comp_proc
+        (advance r_done (pre ++ post) terminated))).
+      repeat split; [exact Ht | exists pre, post; split; reflexivity
+                    | constructor].
+    - destruct Hsh as (Hs1 & Hs2). cbn [program_actions] in Hin.
+      apply in_app_or in Hin as [Hin | Hin].
+      + destruct (IH1 a Hs1 Hin) as (C & K & K' & P1' & H1 & H2 & H3).
+        exists C, K, K', (pg_par P1' P2). repeat split;
+          [exact H1 | exact H2 | apply rl_left, H3].
+      + destruct (IH2 a Hs2 Hin) as (C & K & K' & P2' & H1 & H2 & H3).
+        exists C, K, K', (pg_par P1 P2'). repeat split;
+          [exact H1 | exact H2 | apply rl_right, H3].
+  Qed.
+
+  (** Locating one endpoint drops exactly it from the program's actions. *)
+  Lemma locate_actions : forall C K K' a P P',
+      read_component C = phase r_done K terminated ->
+      selects K a K' ->
+      replace_leaf C (comp_proc (advance r_done K' terminated)) P P' ->
+      Permutation (program_actions P) (a :: program_actions P').
+  Proof.
+    intros C K K' a P P' HC Hsel Hr; induction Hr; cbn [program_actions].
+    - change (read_component (comp_proc (advance r_done K' terminated)))
+        with (advance r_done K' terminated).
+      rewrite (phase_leaf_actions _ _ HC), advance_done_actions.
+      destruct Hsel as (pre & post & -> & ->).
+      apply Permutation_sym, Permutation_middle.
+    - change (a :: (program_actions P' ++ program_actions Q))
+        with ((a :: program_actions P') ++ program_actions Q).
+      apply Permutation_app_tail, IHHr.
+    - eapply Permutation_trans; [apply Permutation_app_head, IHHr |].
+      apply Permutation_sym, Permutation_middle.
+  Qed.
+
+  Lemma parties_zero_iff : forall P c,
+      parties P c = 0%nat <-> ~ In c (program_chan P).
+  Proof.
+    induction P as [C | P1 IH1 P2 IH2]; intro c; cbn [parties program_chan].
+    - destruct (existsb (Nat.eqb c) (comp_chan C)) eqn:E.
+      + split; [discriminate |].
+        intro H; exfalso; apply H, (proj1 (existsb_eqb_true_iff _ _) E).
+      + split; [intros _ | reflexivity].
+        intro Hin. apply (proj2 (existsb_eqb_true_iff c (comp_chan C))) in Hin.
+        rewrite E in Hin; discriminate.
+    - rewrite Nat.eq_add_0, IH1, IH2. split.
+      + intros (H1 & H2) H. apply in_app_or in H as [H | H]; auto.
+      + intro H; split; intro Hin; apply H, in_or_app; auto.
+  Qed.
+
+  (** A channel is a closed point-to-point pair of P — the body of
+      [wf_channels] at one channel. *)
+  Definition chan_paired (P : program) (c : chan) : Prop :=
+    length (filter is_send (endpoints_of P c)) = 1%nat
+    /\ length (filter (fun a => negb (is_send a)) (endpoints_of P c)) = 1%nat
+    /\ parties P c = 2%nat.
+
+  Lemma filter_len1_in : forall {A} (f : A -> bool) (l : list A),
+      length (filter f l) = 1%nat -> exists a, In a l /\ f a = true.
+  Proof.
+    intros A f l H.
+    destruct (filter f l) as [| a rest] eqn:E; [discriminate |].
+    assert (Hin : In a (filter f l)) by (rewrite E; left; reflexivity).
+    apply filter_In in Hin as (H1 & H2). exists a; split; assumption.
+  Qed.
+
+  Lemma send_of_chan : forall P c,
+      length (filter is_send (endpoints_of P c)) = 1%nat ->
+      exists e, In (c_send c e) (program_actions P).
+  Proof.
+    intros P c H. apply filter_len1_in in H as (a & Hin & Hs).
+    unfold endpoints_of in Hin. apply filter_In in Hin as (Hin & Hc).
+    apply Nat.eqb_eq in Hc. destruct a as [c0 e | c0 x]; [| discriminate].
+    cbn in Hc; subst c0. exists e; exact Hin.
+  Qed.
+
+  Lemma recv_of_chan : forall P c,
+      length (filter (fun a => negb (is_send a)) (endpoints_of P c)) = 1%nat ->
+      exists x, In (c_recv c x) (program_actions P).
+  Proof.
+    intros P c H. apply filter_len1_in in H as (a & Hin & Hs).
+    unfold endpoints_of in Hin. apply filter_In in Hin as (Hin & Hc).
+    apply Nat.eqb_eq in Hc. destruct a as [c0 e | c0 x]; [discriminate |].
+    cbn in Hc; subst c0. exists x; exact Hin.
+  Qed.
+
+
+  Lemma endpoints_of_par : forall P1 P2 c,
+      endpoints_of (pg_par P1 P2) c = endpoints_of P1 c ++ endpoints_of P2 c.
+  Proof.
+    intros P1 P2 c; unfold endpoints_of; cbn [program_actions].
+    apply filter_app.
+  Qed.
+
+  Lemma no_endpoints_parties_zero : forall P c,
+      length (filter is_send (endpoints_of P c)) = 0%nat ->
+      length (filter (fun a => negb (is_send a)) (endpoints_of P c)) = 0%nat ->
+      parties P c = 0%nat.
+  Proof.
+    intros P c H1 H2.
+    assert (Hnil : endpoints_of P c = nil).
+    { apply length_zero_iff_nil.
+      rewrite (filter_length_split is_send (endpoints_of P c)), H1, H2.
+      reflexivity. }
+    apply parties_zero_iff. rewrite program_chan_actions.
+    apply (proj1 (filter_chan_nil_iff c (program_actions P))). exact Hnil.
+  Qed.
+
+  (** Progress: a phase whose channel c is a closed point-to-point pair can
+      fire.  The two endpoints sit in different leaves (parties c = 2), so
+      somewhere above them is a ∥ node with one on each side. *)
+  Lemma comm_progress : forall P E c,
+      comm_shape P -> chan_paired P c -> exists G, Σ ⊳ ‹ P, E › ⇝ G.
+  Proof.
+    induction P as [C | P1 IH1 P2 IH2]; intros E c Hsh (Hs & Hr & Hp).
+    - exfalso; cbn [parties] in Hp.
+      destruct (existsb (Nat.eqb c) (comp_chan C)); discriminate.
+    - destruct Hsh as (Hsh1 & Hsh2).
+      rewrite endpoints_of_par, !filter_app, !length_app in Hs, Hr.
+      destruct (length (filter is_send (endpoints_of P1 c))) as [| ns] eqn:Es;
+        destruct (length (filter (fun a => negb (is_send a))
+                            (endpoints_of P1 c))) as [| nr] eqn:Er.
+      + (* both endpoints on the right *)
+        assert (Hz : parties P1 c = 0%nat) by (apply no_endpoints_parties_zero; auto).
+        cbn [parties] in Hp; rewrite Hz in Hp; cbn in Hp.
+        destruct (IH2 E c Hsh2) as (G2 & HG2);
+          [repeat split; [lia | lia | exact Hp] |].
+        exists (map (fun c0 => (pg_par P1 (fst c0), snd c0)) G2).
+        apply ds_par_r, HG2.
+      + (* send on the right, receive on the left *)
+        assert (Hs2 : length (filter is_send (endpoints_of P2 c)) = 1%nat) by lia.
+        assert (Hr1 : length (filter (fun a => negb (is_send a))
+                                (endpoints_of P1 c)) = 1%nat) by lia.
+        destruct (send_of_chan P2 c Hs2) as (e & Hine).
+        destruct (recv_of_chan P1 c Hr1) as (x & Hinx).
+        destruct (comm_shape_locate P2 (c_send c e) Hsh2 Hine)
+          as (Cs & Ks & Ks' & P2' & HCs & Hsel & Hrep2).
+        destruct (comm_shape_locate P1 (c_recv c x) Hsh1 Hinx)
+          as (Cr & Kr & Kr' & P1' & HCr & Hrel & Hrep1).
+        eexists. eapply ds_comm_rl;
+          [exact HCs | exact HCr | exact Hsel | exact Hrel
+          | exact Hrep2 | exact Hrep1].
+      + (* send on the left, receive on the right *)
+        assert (Hs1 : length (filter is_send (endpoints_of P1 c)) = 1%nat) by lia.
+        assert (Hr2 : length (filter (fun a => negb (is_send a))
+                                (endpoints_of P2 c)) = 1%nat) by lia.
+        destruct (send_of_chan P1 c Hs1) as (e & Hine).
+        destruct (recv_of_chan P2 c Hr2) as (x & Hinx).
+        destruct (comm_shape_locate P1 (c_send c e) Hsh1 Hine)
+          as (Cs & Ks & Ks' & P1' & HCs & Hsel & Hrep1).
+        destruct (comm_shape_locate P2 (c_recv c x) Hsh2 Hinx)
+          as (Cr & Kr & Kr' & P2' & HCr & Hrel & Hrep2).
+        eexists. eapply ds_comm_lr;
+          [exact HCs | exact HCr | exact Hsel | exact Hrel
+          | exact Hrep1 | exact Hrep2].
+      + (* both endpoints on the left *)
+        assert (Hz : parties P2 c = 0%nat)
+          by (apply no_endpoints_parties_zero; lia).
+        cbn [parties] in Hp; rewrite Hz, Nat.add_0_r in Hp.
+        destruct (IH1 E c Hsh1) as (G1 & HG1);
+          [repeat split; [lia | lia | exact Hp] |].
+        exists (map (fun c0 => (pg_par (fst c0) P2, snd c0)) G1).
+        apply ds_par_l, HG1.
+  Qed.
+
+
+  Lemma advance_done_chan : forall K',
+      process_chan (advance r_done K' terminated) = cblock_chan K'.
+  Proof. destruct K'; cbn; rewrite ?app_nil_r; reflexivity. Qed.
+
+  Lemma locate_parties : forall C K K' a P P' d,
+      read_component C = phase r_done K terminated ->
+      selects K a K' ->
+      replace_leaf C (comp_proc (advance r_done K' terminated)) P P' ->
+      d <> caction_chan a -> parties P' d = parties P d.
+  Proof.
+    intros C K K' a P P' d HC Hsel Hne Hr; induction Hne; cbn [parties].
+    - apply parties_leaf_eq. unfold comp_chan.
+      change (read_component (comp_proc (advance r_done K' terminated)))
+        with (advance r_done K' terminated).
+      rewrite advance_done_chan, HC. cbn [process_chan]. rewrite app_nil_r.
+      apply (selects_chan_iff _ _ _ _ Hsel Hr).
+    - rewrite IHHne; reflexivity.
+    - rewrite IHHne; reflexivity.
+  Qed.
+
+  (** Everything one rendezvous does, in one statement: a single branch, the
+      ensemble mapped by x := e, the two endpoints gone, every other channel's
+      party count untouched. *)
+  Lemma comm_step_facts : forall P E G,
+      comm_shape P -> Σ ⊳ ‹ P, E › ⇝ G ->
+      exists P' (c : chan) (e : expr) (x : var),
+        G = {|| P', map (fun '(s,r) =>
+                          (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E ||}
+        /\ comm_shape P'
+        /\ Permutation (program_actions P)
+              (c_send c e :: c_recv c x :: program_actions P')
+        /\ (forall d, d <> c -> parties P' d = parties P d).
+  Proof.
+    intros P E G Hsh Hstep; induction Hstep.
+    - exfalso. simpl in Hsh. destruct Hsh as [Ht | (K0 & _ & Ht)];
+        rewrite H in Ht; discriminate.
+    - simpl in Hsh. destruct Hsh as (H1 & H2).
+      destruct (IHHstep H1) as (P1' & c & e & x & -> & Hs1 & Hperm & Hpar).
+      exists (pg_par P1' P2), c, e, x. split; [reflexivity |].
+      split; [split; assumption | split].
+      + cbn [program_actions].
+        change (c_send c e :: c_recv c x
+                :: (program_actions P1' ++ program_actions P2))
+          with ((c_send c e :: c_recv c x :: program_actions P1')
+                ++ program_actions P2).
+        apply Permutation_app_tail, Hperm.
+      + intros d Hd; cbn [parties]; rewrite (Hpar d Hd); reflexivity.
+    - simpl in Hsh. destruct Hsh as (H1 & H2).
+      destruct (IHHstep H2) as (P2' & c & e & x & -> & Hs2 & Hperm & Hpar).
+      exists (pg_par P1 P2'), c, e, x. split; [reflexivity |].
+      split; [split; assumption | split].
+      + cbn [program_actions].
+        eapply Permutation_trans; [apply Permutation_app_head, Hperm |].
+        eapply Permutation_trans; [apply Permutation_sym, Permutation_middle |].
+        apply perm_skip.
+        apply Permutation_sym, Permutation_middle.
+      + intros d Hd; cbn [parties]; rewrite (Hpar d Hd); reflexivity.
+    - simpl in Hsh. destruct Hsh as (Hs1 & Hs2).
+      pose proof (replace_leaf_in_shape _ _ _ _ H3 Hs1) as HCs.
+      pose proof (replace_leaf_in_shape _ _ _ _ H4 Hs2) as HCr.
+      destruct HCs as [Ht | (K0 & _ & Ht)]; rewrite H in Ht; [discriminate |].
+      injection Ht as _ ->.
+      destruct HCr as [Ht' | (K1 & _ & Ht')]; rewrite H0 in Ht'; [discriminate |].
+      injection Ht' as _ ->.
+      exists (pg_par P1' P2'), c, e, x. split; [reflexivity |]. split.
+      + split; [ eapply replace_leaf_keeps_shape;
+                   [exact H3 | apply advance_done_comm_leafy | exact Hs1]
+               | eapply replace_leaf_keeps_shape;
+                   [exact H4 | apply advance_done_comm_leafy | exact Hs2] ].
+      + split.
+        * cbn [program_actions].
+          eapply Permutation_trans;
+            [apply Permutation_app;
+              [apply (locate_actions _ _ _ _ _ _ H H1 H3)
+              |apply (locate_actions _ _ _ _ _ _ H0 H2 H4)] |].
+          cbn [app]. apply perm_skip.
+          apply Permutation_sym, Permutation_middle.
+        * intros d Hd; cbn [parties].
+          rewrite (locate_parties _ _ _ _ _ _ _ H H1 H3 Hd).
+          rewrite (locate_parties _ _ _ _ _ _ _ H0 H2 H4 Hd). reflexivity.
+    - simpl in Hsh. destruct Hsh as (Hs1 & Hs2).
+      pose proof (replace_leaf_in_shape _ _ _ _ H4 Hs1) as HCr.
+      pose proof (replace_leaf_in_shape _ _ _ _ H3 Hs2) as HCs.
+      destruct HCs as [Ht | (K0 & _ & Ht)]; rewrite H in Ht; [discriminate |].
+      injection Ht as _ ->.
+      destruct HCr as [Ht' | (K1 & _ & Ht')]; rewrite H0 in Ht'; [discriminate |].
+      injection Ht' as _ ->.
+      exists (pg_par P1' P2'), c, e, x. split; [reflexivity |]. split.
+      + split; [ eapply replace_leaf_keeps_shape;
+                   [exact H4 | apply advance_done_comm_leafy | exact Hs1]
+               | eapply replace_leaf_keeps_shape;
+                   [exact H3 | apply advance_done_comm_leafy | exact Hs2] ].
+      + split.
+        * cbn [program_actions].
+          eapply Permutation_trans;
+            [apply Permutation_app;
+              [apply (locate_actions _ _ _ _ _ _ H0 H2 H4)
+              |apply (locate_actions _ _ _ _ _ _ H H1 H3)] |].
+          cbn [app].
+          eapply Permutation_trans;
+            [apply perm_skip, Permutation_sym, Permutation_middle |].
+          apply perm_swap.
+        * intros d Hd; cbn [parties].
+          rewrite (locate_parties _ _ _ _ _ _ _ H0 H2 H4 Hd).
+          rewrite (locate_parties _ _ _ _ _ _ _ H H1 H3 Hd). reflexivity.
+  Qed.
+
+
+  (** Consuming a matched pair keeps the channel condition: c loses both of
+      its endpoints so it drops out, and every other channel is untouched. *)
+  Lemma wf_channels_drop_pair : forall P P' c e x,
+      wf_channels P ->
+      Permutation (program_actions P)
+        (c_send c e :: c_recv c x :: program_actions P') ->
+      (forall d, d <> c -> parties P' d = parties P d) ->
+      wf_channels P'.
+  Proof.
+    intros P P' c e x Hch HPK Hpar.
+    assert (HinPc : In c (program_chan P)).
+    { rewrite program_chan_actions. apply (in_map caction_chan _ (c_send c e)).
+      apply (Permutation_in _ (Permutation_sym HPK)); left; reflexivity. }
+    destruct (Hch c HinPc) as (Hsc & Hrc & _).
+    assert (HcA : filter (fun a => Nat.eqb (caction_chan a) c)
+                    (program_actions P') = nil).
+    { pose proof (endpoints_two _ _ Hsc Hrc) as H2. unfold endpoints_of in H2.
+      pose proof (filter_perm_cons2_keep
+                    (fun a => Nat.eqb (caction_chan a) c) _ _ _ _ HPK
+                    (Nat.eqb_refl c) (Nat.eqb_refl c)) as Hcnt.
+      apply length_zero_iff_nil. rewrite H2 in Hcnt. lia. }
+    intros d Hd.
+    assert (HdP : In d (program_chan P)).
+    { rewrite program_chan_actions in Hd |- *.
+      revert Hd. apply incl_map. intros y Hy.
+      apply (Permutation_in _ (Permutation_sym HPK)); right; right; exact Hy. }
+    assert (Hdc : d <> c).
+    { intro Heq; subst d.
+      apply (proj1 (filter_chan_nil_iff c (program_actions P')) HcA).
+      rewrite <- program_chan_actions. exact Hd. }
+    assert (Hgf : (fun a => Nat.eqb (caction_chan a) d) (c_send c e) = false)
+      by (apply Nat.eqb_neq; intro H; exact (Hdc (eq_sym H))).
+    assert (Hgf' : (fun a => Nat.eqb (caction_chan a) d) (c_recv c x) = false)
+      by (apply Nat.eqb_neq; intro H; exact (Hdc (eq_sym H))).
+    pose proof (filter_perm_cons2_drop _ _ _ _ _ HPK Hgf Hgf') as Hperm.
+    destruct (Hch d HdP) as (Hsd & Hrd & Hpd).
+    unfold endpoints_of in *. repeat split.
+    - rewrite <- (Permutation_length (permutation_filter _ is_send _ _ Hperm)).
+      exact Hsd.
+    - rewrite <- (Permutation_length
+                    (permutation_filter _ (fun a => negb (is_send a)) _ _ Hperm)).
+      exact Hrd.
+    - rewrite (Hpar d Hdc). exact Hpd.
+  Qed.
+
+  Lemma comm_no_actions_terminal : forall P,
+      comm_shape P -> program_actions P = nil -> prog_terminated P.
+  Proof.
+    induction P as [C | P1 IH1 P2 IH2]; cbn [program_actions prog_terminated];
+      intros Hsh Hnil.
+    - destruct Hsh as [Ht | (K & Hne & Ht)]; [exact Ht |].
+      exfalso; apply Hne. rewrite Ht in Hnil; cbn in Hnil.
+      rewrite app_nil_r in Hnil; exact Hnil.
+    - destruct Hsh as (H1 & H2). apply app_eq_nil in Hnil as (N1 & N2).
+      split; [apply IH1 | apply IH2]; assumption.
+  Qed.
+
+  (** Termination: each rendezvous drops two endpoints, and progress says one
+      is always available until none are left. *)
+  Lemma comm_reaches_terminal : forall n P E,
+      (length (program_actions P) <= n)%nat ->
+      comm_shape P -> wf_channels P ->
+      exists G, step_star Σ {|| P, E ||} G /\ terminal G.
+  Proof.
+    induction n as [| n IH]; intros P E Hlen Hsh Hch.
+    - exists ({|| P, E ||}). split; [constructor |].
+      constructor; [| constructor]. cbn [fst].
+      apply comm_no_actions_terminal; [exact Hsh |].
+      destruct (program_actions P) as [| a l0] eqn:Ea; [reflexivity |].
+      exfalso; cbn [length] in Hlen; lia.
+    - destruct (program_actions P) as [| a rest] eqn:Ea.
+      + exists ({|| P, E ||}). split; [constructor |].
+        constructor; [| constructor].
+        apply comm_no_actions_terminal; assumption.
+      + assert (HinA : In a (program_actions P))
+          by (rewrite Ea; left; reflexivity).
+        assert (Hc : In (caction_chan a) (program_chan P))
+          by (rewrite program_chan_actions; apply in_map, HinA).
+        destruct (comm_progress P E (caction_chan a) Hsh (Hch _ Hc))
+          as (G1 & HG1).
+        destruct (comm_step_facts _ _ _ Hsh HG1)
+          as (P' & c & e & x & -> & Hsh' & Hperm & Hpar).
+        assert (Hlen' : (length (program_actions P') <= n)%nat).
+        { pose proof (Permutation_length Hperm) as HL.
+          rewrite Ea in HL. cbn [length] in HL, Hlen. lia. }
+        pose proof (wf_channels_drop_pair _ _ _ _ _ Hch Hperm Hpar) as Hch'.
+        destruct E as [| st E0].
+        * exists nil. split; [| constructor].
+          eapply star_step; [| constructor].
+          apply (mixed_lift Σ ({|| P, nil ||}) P nil nil
+                   ({|| P', nil ||})); [apply Permutation_refl | exact HG1].
+        * destruct (IH P' (map (fun '(s,r) =>
+                     (s [ x |-> eval_expr (i_fn Σ) s e ], r)) (st :: E0))
+                     Hlen' Hsh' Hch') as (G & Hstar & Hterm).
+          exists G. split; [| exact Hterm].
+          eapply star_step; [| exact Hstar].
+          apply (mixed_lift Σ ({|| P, st :: E0 ||}) P (st :: E0) nil
+                   ({|| P', map (fun '(s,r) =>
+                     (s [ x |-> eval_expr (i_fn Σ) s e ], r)) (st :: E0) ||}));
+            [apply Permutation_refl | exact HG1].
+  Qed.
+
 End SoundnessFacts.
