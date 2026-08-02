@@ -8,7 +8,7 @@
 From Stdlib Require Import Lists.List.
 From Stdlib Require Import Arith.PeanoNat.
 From QuantumLib Require Import Matrix Quantum.
-From Locqhl.Core Require Import Syntax QuantumActions SemanticDomain Semantics Assertions WellFormed.
+From Locqhl.Core Require Import Syntax Names QuantumActions SemanticDomain Semantics Assertions WellFormed.
 Import ListNotations.
 
 (** ** Assertion transformers (all syntactic) ************************* *)
@@ -89,8 +89,8 @@ Inductive local_derivable {dim} (Σ : interp dim)
 
 (* Conseq.  The target postcondition must denote an effect: the paper's
    assertion-formation check (p.10), surfacing as a side condition exactly
-   where a new assertion enters a derivation — same treatment as
-   wf_program on Par-Comp. *)
+   where a new assertion enters a derivation — the same treatment the
+   distributed rules get below. *)
 | rule_conseq : forall Q Q' R R' L,
     Q' ⊨[Σ] Q ->
     Σ ⊢ₗ {{ Q }} L {{ R }} ->
@@ -156,6 +156,47 @@ Inductive zip3 : program -> program -> program -> program -> Prop :=
     zip3 d2 k2 t2 z2 ->
     zip3 (pg_par d1 d2) (pg_par k1 k2) (pg_par t1 t2) (pg_par z1 z2).
 
+(** ** Side conditions of the distributed rules ***********************
+
+      Each distributed rule carries exactly the syntactic check its own
+      soundness argument consumes, rather than the whole of Definition 2.1:
+
+        Par-Disjoint-MP    wf_ownership PD    DisjMP on the D-row
+        Comm-Select-MP     wf_phase PK        the phase matches, and commutes
+        Par-Comp-MP        wf_cut PK PT P     the cut is legal
+
+      Definition 2.1 then discharges all three at once for a well-formed
+      source program — that is what Theorem 2.1 and its companions are for —
+      so nothing is lost for the case studies, while [derivable] itself no
+      longer mentions [wf_program].  All three checks stay syntactic.
+*********************************************************************)
+
+(** recv(K₁,…,K_N) and oread(K₁,…,K_N) of Definition 2.1(4), read off the
+    endpoints of the phase.  Every leaf of a phase is a bare communication
+    block, so its endpoints are all of its actions. **)
+Definition phase_recv (PK : program) : list var :=
+  flat_map caction_change (program_actions PK).
+Definition phase_oread (PK : program) : list var :=
+  flat_map caction_read (program_actions PK).
+
+(** Comm-Select-MP.  Within this phase each channel carries one output and
+    one input, in two distinct leaves — so a matched selection is
+    unambiguous — and Definition 2.1(4) holds, which is what commutes the
+    selected rendezvous to the front of a terminal run.  Ownership is NOT
+    among these: a rendezvous acts as the identity on the quantum store. **)
+Definition wf_phase (PK : program) : Prop :=
+  wf_channels PK
+  /\ NoDup (phase_recv PK)
+  /\ disjoint (phase_recv PK) (phase_oread PK).
+
+(** Par-Comp-MP.  Ownership across the leaves commutes a local step of one
+    leaf past a rendezvous between two others, and the channel disjointness
+    stops the displayed phase from matching an endpoint that belongs to a
+    tail.  Neither clause recurses into PT: the tail carries its own
+    conditions inside its own premise. **)
+Definition wf_cut (PK PT P : program) : Prop :=
+  wf_ownership P /\ disjoint (program_chan PK) (program_chan PT).
+
 (** ** Helpers for Branch-Accum *************************************** *)
 
 (** Σ_{i∈J} A_i over a NON-EMPTY family (there is no zero predicate). **)
@@ -181,9 +222,11 @@ Reserved Notation "Σ '⊢ₚ' '{{' Pre '}}' P '{{' Post '}}'"
 
 Inductive derivable {dim} (Σ : interp dim)
     : assertion dim -> program -> assertion dim -> Prop :=
-(* Par-Disjoint-MP.  DisjMP is not a premise: well-formedness supplies it
-   (Theorem 2.1). *)
+(* Par-Disjoint-MP.  On a D-row [wf_ownership] IS DisjMP({Dᵢ}) — the two
+   read the same four footprint clauses off the same blocks
+   ([wf_ownership_disj_footprints]). *)
 | rule_par_disjoint : forall Q R PD Dseq,
+    wf_ownership PD ->
     locals_seq PD Dseq ->
     Σ ⊢ₗ {{ Q }} Dseq {{ R }} ->
     Σ ⊢ₚ {{ Q }} PD {{ R }}
@@ -194,15 +237,15 @@ Inductive derivable {dim} (Σ : interp dim)
 (* Comm-Select-MP: consume one matched pair out of the current communication
    phase (p.15).  [comm_sel] matches the phase leaf by leaf, as [zip3] does. *)
 | rule_comm_select : forall Q R PK P1 PK' c e x,
+    wf_phase PK ->
     PK ∋ₖ c_send c e □ P1 ->
     P1 ∋ₖ c_recv c x □ PK' ->
     Σ ⊢ₚ {{ Q }} PK' {{ R }} ->
     Σ ⊢ₚ {{ assertion_subst Q x e }} PK {{ R }}
-(* Par-Comp-MP.  [wf_program] is the paper's "rule instances range over
-   well-formed core programs" (p.13). *)
+(* Par-Comp-MP. *)
 | rule_par_comp : forall Q0 Q1 Q2 Q3 PD PK PT P,
     zip3 PD PK PT P ->
-    wf_program P ->
+    wf_cut PK PT P ->
     Σ ⊢ₚ {{ Q0 }} PD {{ Q1 }} ->
     Σ ⊢ₚ {{ Q1 }} PK {{ Q2 }} ->
     Σ ⊢ₚ {{ Q2 }} PT {{ Q3 }} ->

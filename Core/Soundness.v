@@ -82,7 +82,7 @@ Section Soundness.
 
   Lemma par_disjoint_sound :
     forall (Q R : assertion dim) (PD : program) (Dseq : lblock),
-      wf_program PD ->
+      wf_ownership PD ->
       locals_seq PD Dseq ->
       Σ ⊢ₗ {{ Q }} Dseq {{ R }} ->
       Σ ⊨ {{ Q }} PD {{ R }}.
@@ -93,7 +93,7 @@ Section Soundness.
   Lemma comm_select_sound :
     forall (Q R : assertion dim) (PK P1 PK' : program)
            (c : chan) (e : expr) (x : var),
-      wf_program PK ->
+      wf_phase PK ->
       PK ∋ₖ c_send c e □ P1 ->
       P1 ∋ₖ c_recv c x □ PK' ->
       Σ ⊨ {{ Q }} PK' {{ R }} ->
@@ -106,7 +106,7 @@ Section Soundness.
   Lemma par_comp_sound :
     forall (Q0 Q1 Q2 Q3 : assertion dim) (PD PK PT P : program),
       zip3 PD PK PT P ->
-      wf_program P ->
+      wf_cut PK PT P ->
       Σ ⊨ {{ Q0 }} PD {{ Q1 }} ->
       Σ ⊨ {{ Q1 }} PK {{ Q2 }} ->
       Σ ⊨ {{ Q2 }} PT {{ Q3 }} ->
@@ -153,7 +153,13 @@ Section Soundness.
   Qed.
 
   (** ** Well-formedness is inherited by the sub-programs appearing in rule
-         premises — needed to thread [wf_program] through the induction. *)
+         premises.  Soundness no longer needs this — each rule carries its
+         own side condition — so these are now the DISCHARGE lemmas: they
+         are what supplies those conditions, phase after phase, to someone
+         building a derivation for a well-formed source program.  Their
+         [wf_program] conclusions are stronger than the rules ask for
+         ([wf_phase], [wf_cut]); tightening them is left for when the
+         discharge theorem is stated. *)
   Lemma wf_comm_select_residual :
     forall (PK P1 PK' : program) (c : chan) (e : expr) (x : var),
       wf_program PK ->
@@ -408,15 +414,17 @@ Section Soundness.
   Fixpoint derivable_ind'
       (Pr : assertion dim -> program -> assertion dim -> Prop)
       (Hpd : forall Q R PD Dseq,
+          wf_ownership PD ->
           locals_seq PD Dseq -> Σ ⊢ₗ {{ Q }} Dseq {{ R }} -> Pr Q PD R)
       (Hcd : forall Q PK, all_comm_done PK -> Pr Q PK Q)
       (Hcs : forall Q R PK P1 PK' c e x,
+          wf_phase PK ->
           PK ∋ₖ c_send c e □ P1 ->
           P1 ∋ₖ c_recv c x □ PK' ->
           Σ ⊢ₚ {{ Q }} PK' {{ R }} -> Pr Q PK' R ->
           Pr (assertion_subst Q x e) PK R)
       (Hpc : forall Q0 Q1 Q2 Q3 PD PK PT P,
-          zip3 PD PK PT P -> wf_program P ->
+          zip3 PD PK PT P -> wf_cut PK PT P ->
           Σ ⊢ₚ {{ Q0 }} PD {{ Q1 }} -> Pr Q0 PD Q1 ->
           Σ ⊢ₚ {{ Q1 }} PK {{ Q2 }} -> Pr Q1 PK Q2 ->
           Σ ⊢ₚ {{ Q2 }} PT {{ Q3 }} -> Pr Q2 PT Q3 ->
@@ -438,10 +446,10 @@ Section Soundness.
       (d : Σ ⊢ₚ {{ Q }} P {{ R }}) {struct d} : Pr Q P R :=
     let rec := derivable_ind' Pr Hpd Hcd Hcs Hpc Hba Hcq in
     match d with
-    | rule_par_disjoint _ Q R PD Dseq h1 h2 => Hpd Q R PD Dseq h1 h2
+    | rule_par_disjoint _ Q R PD Dseq h0 h1 h2 => Hpd Q R PD Dseq h0 h1 h2
     | rule_comm_done _ Q PK h => Hcd Q PK h
-    | rule_comm_select _ Q R PK P1 PK' c e x h1 h2 d' =>
-        Hcs Q R PK P1 PK' c e x h1 h2 d' (rec _ _ _ d')
+    | rule_comm_select _ Q R PK P1 PK' c e x h0 h1 h2 d' =>
+        Hcs Q R PK P1 PK' c e x h0 h1 h2 d' (rec _ _ _ d')
     | rule_par_comp _ Q0 Q1 Q2 Q3 PD PK PT P h1 h2 d1 d2 d3 =>
         Hpc Q0 Q1 Q2 Q3 PD PK PT P h1 h2
             d1 (rec _ _ _ d1) d2 (rec _ _ _ d2) d3 (rec _ _ _ d3)
@@ -470,51 +478,44 @@ Section Soundness.
 
   (** ** Theorem 4.1 (Soundness of the proof system).
          Assembled from the per-rule lemmas by induction on the derivation —
-         the wiring below is machine-checked. *)
+         the wiring below is machine-checked.  There is no [wf_program]
+         premise: every rule instance already carries the side condition its
+         own validity argument needs, so the theorem is about the proof
+         system rather than about one class of programs. *)
   Theorem soundness :
     wf_interp Σ ->
     forall (Q R : assertion dim) (P : program),
-      wf_program P ->
       Σ ⊢ₚ {{ Q }} P {{ R }} ->
       Σ ⊨ {{ Q }} P {{ R }}.
   Proof.
     intros interp_ok.
     assert (main : forall (Q : assertion dim) (P : program) (R : assertion dim),
-               Σ ⊢ₚ {{ Q }} P {{ R }} -> wf_program P -> Σ ⊨ {{ Q }} P {{ R }}).
-    { apply (derivable_ind'
-               (fun Q P R => wf_program P -> Σ ⊨ {{ Q }} P {{ R }})).
+               Σ ⊢ₚ {{ Q }} P {{ R }} -> Σ ⊨ {{ Q }} P {{ R }}).
+    { apply (derivable_ind' (fun Q P R => Σ ⊨ {{ Q }} P {{ R }})).
       - (* Par-Disjoint-MP *)
-        intros q r pd dseq Hls Hloc Hwf.
+        intros q r pd dseq Hown Hls Hloc.
         eapply par_disjoint_sound; eassumption.
       - (* Comm-Done *)
-        intros q pk Hacd Hwf. apply comm_done_sound; assumption.
+        intros q pk Hacd. apply comm_done_sound; assumption.
       - (* Comm-Select-MP *)
-        intros q r pk p1 pk' ch ex xv Hcs1 Hcs2 Hd0 IH Hwf.
-        eapply comm_select_sound; try eassumption.
-        apply IH. eapply wf_comm_select_residual; eassumption.
+        intros q r pk p1 pk' ch ex xv Hwfp Hcs1 Hcs2 Hd0 IH.
+        eapply comm_select_sound; eassumption.
       - (* Par-Comp-MP *)
-        intros q0 q1 q2 q3 pd pk pt p Hz Hwfp Hd1 IH1 Hd2 IH2 Hd3 IH3 Hwf.
-        eapply par_comp_sound; try eassumption.
-        + apply IH1. eapply wf_zip3_prefix; eassumption.
-        + apply IH2. eapply wf_zip3_comm; eassumption.
-        + apply IH3. eapply wf_zip3_tail; eassumption.
+        intros q0 q1 q2 q3 pd pk pt p Hz Hcut Hd1 IH1 Hd2 IH2 Hd3 IH3.
+        eapply par_comp_sound; eassumption.
       - (* Branch-Accum *)
-        intros phi bb p a0 psi0 fam Hd0 IH0 Hdf IHf Hex Hwf.
-        apply branch_accum_sound.
-        + apply IH0; assumption.
-        + (* strip each family member's wf_program hypothesis *)
-          eapply Forall_impl; [| exact IHf].
-          cbv beta. intros ? Him. apply Him. exact Hwf.
-        + assumption.
+        intros phi bb p a0 psi0 fam Hd0 IH0 Hdf IHf Hex.
+        apply branch_accum_sound; assumption.
       - (* Conseq — wf_assertion supplied by the rule itself *)
-        intros q q' r r' p He1 Hd0 IH0 He2 Hwfa Hwf.
-        eapply conseq_sound.
-        + exact interp_ok.
-        + eassumption.
-        + eassumption.
-        + apply IH0; assumption.
-        + assumption. }
-    intros Q R P Hwf Hd. apply main; assumption.
+        intros q q' r r' p He1 Hd0 IH0 He2 Hwfa.
+        eapply conseq_sound; eassumption. }
+    intros Q R P Hd. apply main; assumption.
   Qed.
 
 End Soundness.
+
+(*   
+
+do [] g -> comm; l
+
+**)
