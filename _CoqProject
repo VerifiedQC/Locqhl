@@ -3,6 +3,7 @@
 
 # New mechanization, written from scratch
 -Q Core Locqhl.Core
+-Q CaseStudies Locqhl.CaseStudies
 
 # --- QuantumLib (dependency) ---
 third_party/QuantumLib/CauchySchwarz.v
@@ -39,7 +40,10 @@ Core/SemanticDomain.v
 Core/Semantics.v
 Core/Assertions.v
 Core/TraceFacts.v
-Core/Rules.v
 Core/WellFormed.v
+Core/Rules.v
 Core/SoundnessFacts.v
 Core/Soundness.v
+
+# --- Case studies ---
+CaseStudies/Teleportation.v

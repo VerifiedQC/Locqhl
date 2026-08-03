@@ -8,6 +8,17 @@
       K ::= eps | alpha | K [] K
       S ::= L_0 ; K_0 ; L_1 ; K_1 ; ... ; L_r ; K_r ; L_{r+1}   (r >= 0)
       P ::= S_1 || ... || S_n
+
+    The parallel layer is ONE tree functor [row A], instantiated three times.
+    The proof system's three subjects — the paper's
+
+      D_1 || ... || D_N     the current communication-free prefixes
+      K_1 || ... || K_N     the current communication phase
+      S_1 || ... || S_N     the program itself
+
+    — differ only in what sits at a leaf, so they are [row lblock],
+    [row cblock] and [row process].  A row is what a rule is ABOUT; it is
+    not carved out of the program type by a side predicate.
 * **)
 
 From Stdlib Require Import Lists.List.
@@ -20,7 +31,6 @@ Import ListNotations.
 Definition var   : Type := nat.   (* classical variables   x in Var   *)
 Definition qvar  : Type := nat.   (* quantum variables      q in qVar  *)
 Definition chan  : Type := nat.   (* communication channels c in Chan  *)
-Definition party : Type := nat.   (* component index in S_1 || .. || S_n *)
 
 (* Operator / value symbols, interpreted later. *)
 Definition val    : Type := nat.  (* values          v in Val *)
@@ -43,6 +53,20 @@ Inductive bexpr : Type :=
 | b_and   : bexpr -> bexpr -> bexpr      (* b /\ b *)
 | b_or    : bexpr -> bexpr -> bexpr.     (* b \/ b *)
 
+(** The relation alphabet R is arbitrary, but the guards an LOCC protocol
+    actually writes are comparisons of classical values, and three of them
+    suffice for every protocol in the paper.  Fix canonical symbols, and
+    write the guards through them rather than through raw [b_rel] and a
+    numeral nobody can read.  What they MEAN is a property of the structure
+    Σ, not of the syntax — see [Semantics.standard_rels]. **)
+Definition r_eq : relsym := 0.   (* e₁ = e₂  *)
+Definition r_lt : relsym := 1.   (* e₁ < e₂  *)
+Definition r_gt : relsym := 2.   (* e₁ > e₂  *)
+
+Definition b_eq (e1 e2 : expr) : bexpr := b_rel r_eq [e1; e2].
+Definition b_lt (e1 e2 : expr) : bexpr := b_rel r_lt [e1; e2].
+Definition b_gt (e1 e2 : expr) : bexpr := b_rel r_gt [e1; e2].
+
 (** ** Local blocks ** **)
 Inductive lblock : Type :=
 | l_skip   : lblock                             (* skip *)
@@ -64,6 +88,21 @@ Inductive caction : Type :=
    [] is ε_K, and □ is list append. *)
 Definition cblock : Type := list caction.
 
+(** Selecting one endpoint out of an unordered block:  K = a □ K'.
+    Structural rather than an existential over append decompositions, so a
+    selection is BUILT by constructors and TAKEN APART by induction.  This
+    is the one-step generator of "the block is unordered": □ is read modulo
+    associativity and commutativity, and picking any occurrence is all the
+    proof system ever needs of that. **)
+Inductive picks : cblock -> caction -> cblock -> Prop :=
+| pick_here  : forall a K,
+    picks (a :: K) a K
+| pick_there : forall a b K K',
+    picks K a K' -> picks (b :: K) a (b :: K').
+
+Notation "K '∋' a '□' K'" := (picks K a K')
+  (at level 70, a at level 60).
+
 (** ** Local residuals — what is left of a local block.
        This is syntax (↓, or a command that still remains), so it lives
        here with the language rather than in the semantic domain. ** **)
@@ -73,55 +112,104 @@ Inductive residual : Type :=
 
 Notation "'↓'" := r_done (at level 0).
 
+(** Reading a residual as the local block it still owes — the ↓ ≡ skip half
+    of the erasure conventions of p.7. **)
+Definition residual_lblock (R : residual) : lblock :=
+  match R with r_done => l_skip | r_more L => L end.
+
 (** ** Processes (sequential process S). ** **)
 Inductive process : Type :=
 | terminated : process                                (* ↓ *)
 | phase      : residual -> cblock -> process -> process. (* (L;K) ; S *)
 
-(** ** Components (Fig. 2(b)) — one party's contribution to a program.
-    A D;K;T phase leaf is written [comp_proc (phase (r_more D) K T)]. **)
-Inductive component : Type :=
-| comp_local : lblock  -> component                        (* D       *)
-| comp_comm  : cblock  -> component                        (* K       *)
-| comp_proc  : process -> component.                       (* T or S  *)
-
-(** ** Distributed programs: P ::= S₁ ‖ … ‖ Sₙ, a free binary parallel tree
-    of components.  Well-formedness (Def 2.1) is a side condition
-    (WellFormed.wf_program), not syntax. **)
-Inductive program : Type :=
-| pg_comp : component -> program              (* a single component      *)
-| pg_par  : program -> program -> program.    (* P ∥ P                   *)
-
-(** Reading a component as the process it abbreviates (erasure conventions,
-    p.7):  D ↦ D;ε_K;↓,  K ↦ ↓;K;↓,  ε_K;↓ ↦ ↓.  The semantics and all
-    footprint definitions look at a leaf only through its reading. **)
-Definition read_component (C : component) : process :=
-  match C with
-  | comp_local D     => phase (r_more D) [] terminated
-  | comp_comm  []    => terminated
-  | comp_comm  K     => phase r_done K terminated
-  | comp_proc  T     => T
+(** Rebuild a process from its head phase, applying BOTH structural
+    erasures of p.7 at once:  ↓;T ≡ T  and  ε_K;T ≡ T.  When both hold the
+    phase is over, so it is dropped and the process continues with its next
+    one.  Every place that builds a phase — the operational semantics after
+    a step, and the proof system when it cuts a program into rows — goes
+    through this, so the erasure convention is honoured by construction. **)
+Definition advance (R : residual) (K : cblock) (T : process) : process :=
+  match R, K with
+  | r_done, []  => T                 (* phase complete → on to the next *)
+  | _     , _   => phase R K T
   end.
 
-(** Termination of a component / of a program. **)
-Definition comp_terminated (C : component) : Prop :=
-  read_component C = terminated.
+(** ** The parallel layer: one tree, three instances ****************** *)
 
-Fixpoint prog_terminated (P : program) : Prop :=
-  match P with
-  | pg_comp C    => comp_terminated C
-  | pg_par P1 P2 => prog_terminated P1 /\ prog_terminated P2
+(** A free binary tree of leaves of type A.  Well-formedness (Def 2.1) is a
+    side condition on rows, not a restriction on the type: ragged async
+    intermediates such as ↓ ∥ mid-phase must stay typeable. **)
+Inductive row (A : Type) : Type :=
+| leaf : A -> row A
+| par  : row A -> row A -> row A.
+
+Arguments leaf {A} _.
+Arguments par  {A} _ _.
+
+Notation lrow    := (row lblock).    (* D₁ ∥ … ∥ D_N *)
+Notation krow    := (row cblock).    (* K₁ ∥ … ∥ K_N *)
+Notation program := (row process).   (* S₁ ∥ … ∥ S_N *)
+
+(** The generic traversals.  Every row-level notion downstream — footprints,
+    disjointness, termination, the two soundness-level embeddings — is one
+    of these three applied to the right leaf function, so none of it is
+    written out per instance. **)
+Fixpoint row_map {A B} (f : A -> B) (r : row A) : row B :=
+  match r with
+  | leaf a      => leaf (f a)
+  | par r1 r2   => par (row_map f r1) (row_map f r2)
   end.
 
-(** [replace_leaf a b P P']: P' is P with ONE leaf occurrence of a replaced
-    by b, in place.  The Communicate step and Comm-Select-MP select their
-    two endpoints this way. **)
-Inductive replace_leaf (a b : component) : program -> program -> Prop :=
-| rl_here  : replace_leaf a b (pg_comp a) (pg_comp b)
-| rl_left  : forall P P' Q,
-    replace_leaf a b P P' -> replace_leaf a b (pg_par P Q) (pg_par P' Q)
-| rl_right : forall P Q Q',
-    replace_leaf a b Q Q' -> replace_leaf a b (pg_par P Q) (pg_par P Q').
+(** The leaves, left to right — the paper's S₁, …, S_N as a list. **)
+Fixpoint row_leaves {A} (r : row A) : list A :=
+  match r with
+  | leaf a      => [a]
+  | par r1 r2   => row_leaves r1 ++ row_leaves r2
+  end.
+
+Fixpoint row_all {A} (P : A -> Prop) (r : row A) : Prop :=
+  match r with
+  | leaf a      => P a
+  | par r1 r2   => row_all P r1 /\ row_all P r2
+  end.
+
+(** Collect a per-leaf list, left to right.  Every footprint of a row is
+    this applied to the leaf's own footprint; it is a fixpoint rather than
+    [flat_map ∘ row_leaves] so that the ∥ case splits definitionally. **)
+Fixpoint row_flat {A B} (f : A -> list B) (r : row A) : list B :=
+  match r with
+  | leaf a      => f a
+  | par r1 r2   => row_flat f r1 ++ row_flat f r2
+  end.
+
+Lemma row_flat_leaves : forall {A B} (f : A -> list B) (r : row A),
+    row_flat f r = flat_map f (row_leaves r).
+Proof.
+  intros A B f r; induction r as [a | r1 IH1 r2 IH2]; simpl.
+  - rewrite app_nil_r; reflexivity.
+  - rewrite flat_map_app, IH1, IH2; reflexivity.
+Qed.
+
+Lemma row_leaves_map : forall {A B} (f : A -> B) (r : row A),
+    row_leaves (row_map f r) = map f (row_leaves r).
+Proof.
+  intros A B f r; induction r as [a | r1 IH1 r2 IH2]; simpl;
+    [reflexivity | rewrite map_app, IH1, IH2; reflexivity].
+Qed.
+
+(** Termination of a program: every leaf is ↓. **)
+Definition prog_terminated (P : program) : Prop :=
+  row_all (fun T => T = terminated) P.
+
+(** [replace_leaf a b r r']: r' is r with ONE leaf occurrence of a replaced
+    by b, in place.  The Communicate step selects its two endpoints this
+    way. **)
+Inductive replace_leaf {A} (a b : A) : row A -> row A -> Prop :=
+| rl_here  : replace_leaf a b (leaf a) (leaf b)
+| rl_left  : forall r r' q,
+    replace_leaf a b r r' -> replace_leaf a b (par r q) (par r' q)
+| rl_right : forall r q q',
+    replace_leaf a b q q' -> replace_leaf a b (par r q) (par r q').
 
 (** ** Variables of, and substitution into, program expressions ******** *)
 
@@ -195,7 +283,7 @@ Notation "'if' b 'then' c1 'else' c0" := (l_if b c1 c0)
       c1 custom com at level 99, c0 custom com at level 99) : com_scope.
 
 
-(** ** Notation for the distributed-program layer (α, K, S, P).
+(** ** Notation for the distributed layer (α, K, S, and rows).
 
     Mirrors the paper's surface syntax:
       c ! e      communication output  (c_send)
@@ -203,28 +291,35 @@ Notation "'if' b 'then' c1 'else' c0" := (l_if b c1 c0)
       ε              empty communication block  ε_K
       [ α ; β ]      communication block  α □ β    (a [cblock] is a list)
       L ⨾ K ⨾ S      one phase: local block L, comm block K, then S
-      p ∥ q          parallel composition  (pg_par)
-      ⟨ₗ D ⟩         a leaf holding a bare local block D   (pg_comp (comp_local D))
-      ⟨ₖ K ⟩         a leaf holding a bare comm block  K   (pg_comp (comp_comm  K))
-      ⟨ₛ T ⟩         a leaf holding a whole process    T   (pg_comp (comp_proc  T))
+      p ∥ q          parallel composition of two rows  (par)
+      ⟨ a ⟩          a one-leaf row  (leaf a)
     A phase whose local block has already finished is written out directly
     as [phase ↓ K S].
+
+    There is one leaf bracket, not three: a D-row leaf holds an [lblock], a
+    K-row leaf a [cblock] and a program leaf a [process], but all three are
+    the same constructor, so the leaf's type is what tells them apart.  Thus
+    a D-row displays as ⟨ D₁ ⟩ ∥ ⟨ D₂ ⟩ and a program as ⟨ S₁ ⟩ ∥ ⟨ S₂ ⟩.
 ** **)
 Declare Scope proc_scope.
 Delimit Scope proc_scope with proc.
 
-Notation "c '!' e" := (c_send c e)
+(* The paper writes c!e and c?x.  A bare "!" is unusable: Corelib.Program.Utils
+   declares a nullary "!" and notation GRAMMAR is global — once anything in
+   the file's dependencies pulls in Program (QuantumLib does), the parser
+   reads "c !" as an application, and no amount of Close Scope helps.  The
+   doubled forms U+203C / U+2047 are free and keep the output/input pair
+   symmetric. *)
+Notation "c '‼' e" := (c_send c e)
   (at level 60, no associativity) : proc_scope.
-Notation "c '?' x" := (c_recv c x)
+Notation "c '⁇' x" := (c_recv c x)
   (at level 60, no associativity) : proc_scope.
 Notation "'ε'" := (@nil caction) : proc_scope.
 Notation "L '⨾' K '⨾' S" := (phase (r_more L) K S)
   (at level 100, K at level 99, right associativity) : proc_scope.
 
-Notation "p '∥' q" := (pg_par p q)
+Notation "p '∥' q" := (par p q)
   (at level 41, right associativity) : proc_scope.
-Notation "'⟨ₗ' D '⟩'" := (pg_comp (comp_local D)) (at level 0) : proc_scope.
-Notation "'⟨ₖ' K '⟩'" := (pg_comp (comp_comm  K)) (at level 0) : proc_scope.
-Notation "'⟨ₛ' T '⟩'" := (pg_comp (comp_proc  T)) (at level 0) : proc_scope.
+Notation "'⟨' a '⟩'" := (leaf a) (at level 0) : proc_scope.
 
 Open Scope proc_scope.

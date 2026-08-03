@@ -101,60 +101,62 @@ Inductive local_derivable {dim} (Σ : interp dim)
 where "Σ '⊢ₗ' '{{' Pre '}}' L '{{' Post '}}'" := (local_derivable Σ Pre L Post).
 
 
-(** ** Row shapes of the distributed rules ****************************
+(** ** The rows of the distributed rules ******************************
 
-      D₁‖…‖D_N      locals_seq   (with its left-to-right sequentialisation)
-      ε_K‖…‖ε_K     all_comm_done
-      K₁‖…‖K_N      comm_sel     (one endpoint consumed)
-      (Dᵢ;Kᵢ;Tᵢ)‖…  zip3 of the D-, K- and T-rows
+      D₁‖…‖D_N      lrow      sequentialised by [lseq]
+      K₁‖…‖K_N      krow      one endpoint taken by [kpick]
+      S₁‖…‖S_N      program   split into the three rows by [cut]
+
+      The split is by whether a CHOICE is being made.  [lseq] and [cut]
+      are determinate constructions, so they are functions and reduce on a
+      concrete row — their premises close by [reflexivity].  Picking an
+      endpoint out of a phase is a genuine choice, and the operational
+      semantics picks the same way, so [kpick] is a structural relation and
+      the soundness bridge to [picks]/[replace_leaf] costs nothing.
 *********************************************************************)
 
-Inductive locals_seq : program -> lblock -> Prop :=
-| lsq_leaf : forall D, locals_seq (⟨ₗ D ⟩) D
-| lsq_par  : forall P1 P2 D1 D2,
-    locals_seq P1 D1 ->
-    locals_seq P2 D2 ->
-    locals_seq (pg_par P1 P2) (l_seq D1 D2).
+(** D₁; …; D_N, the displayed order of Par-Disjoint-MP's premise. **)
+Fixpoint lseq (d : lrow) : lblock :=
+  match d with
+  | leaf D    => D
+  | par d1 d2 => l_seq (lseq d1) (lseq d2)
+  end.
 
-Inductive all_comm_done : program -> Prop :=
-| acd_leaf : all_comm_done (⟨ₖ [] ⟩)
-| acd_par  : forall P1 P2,
-    all_comm_done P1 ->
-    all_comm_done P2 ->
-    all_comm_done (pg_par P1 P2).
+(** Cut every process at its current communication phase: Sᵢ = Dᵢ; Kᵢ; Tᵢ.
+    A total function, so the padding of p.15 — "processes without a current
+    local prefix or communication block use skip and ε_K" — happens here
+    instead of being supplied by whoever applies the rule.  A terminated
+    leaf pads to (skip, ε_K, ↓). **)
+Fixpoint cut (P : program) : lrow * krow * program :=
+  match P with
+  | leaf terminated    => (leaf l_skip, leaf ε, leaf terminated)
+  | leaf (phase R K T) => (leaf (residual_lblock R), leaf K, leaf T)
+  | par P1 P2 =>
+      let '(d1, k1, t1) := cut P1 in
+      let '(d2, k2, t2) := cut P2 in
+      (par d1 d2, par k1 k2, par t1 t2)
+  end.
 
-(** Selecting one endpoint out of a communication phase K₁‖…‖K_N.
-    Same skeleton as [zip3]: the two rows are related LEAF BY LEAF, so every
-    leaf is forced to be a bare communication block.  [zip3] treats all leaves
-    alike; here exactly ONE leaf must lose an endpoint, and the [option] index
-    is what tells the two leaf behaviours apart — [None] keeps the leaf,
-    [Some a] drops the endpoint a from it. **)
-Inductive comm_sel : option caction -> program -> program -> Prop :=
-| csel_keep  : forall K, comm_sel None (⟨ₖ K ⟩) (⟨ₖ K ⟩)
-| csel_drop  : forall a K K',
-    selects K a K' -> comm_sel (Some a) (⟨ₖ K ⟩) (⟨ₖ K' ⟩)
-| csel_par_l : forall oa P1 P1' P2 P2',
-    comm_sel oa P1 P1' -> comm_sel None P2 P2' ->
-    comm_sel oa (pg_par P1 P2) (pg_par P1' P2')
-| csel_par_r : forall oa P1 P1' P2 P2',
-    comm_sel None P1 P1' -> comm_sel oa P2 P2' ->
-    comm_sel oa (pg_par P1 P2) (pg_par P1' P2').
+(** The phase K₁‖…‖K_N exposes endpoint a at one of its leaves, leaving the
+    residual phase.  Row-level companion of [picks]; the other leaves are
+    carried through unchanged by reusing the very same subtree. **)
+Inductive kpick : krow -> caction -> krow -> Prop :=
+| kp_here  : forall K a K',
+    K ∋ a □ K' -> kpick (leaf K) a (leaf K')
+| kp_left  : forall k1 k1' k2 a,
+    kpick k1 a k1' -> kpick (par k1 k2) a (par k1' k2)
+| kp_right : forall k1 k2 k2' a,
+    kpick k2 a k2' -> kpick (par k1 k2) a (par k1 k2').
 
-(** The row-level companion of Semantics' block-level [K ∋ a □ K']: the phase
-    ⟨ₖ K₁⟩ ∥ … ∥ ⟨ₖ K_N⟩ exposes the endpoint a, with residual phase PK'. **)
-Notation "PK '∋ₖ' a '□' PK'" := (comm_sel (Some a) PK PK')
+Notation "k '∋ₖ' a '□' k'" := (kpick k a k')
   (at level 70, a at level 60).
 
-(** The D-, K- and T-rows have the same tree shape and zip leafwise into
-    the program of phases. **)
-Inductive zip3 : program -> program -> program -> program -> Prop :=
-| zip3_leaf : forall D K T,
-    zip3 (⟨ₗ D ⟩) (⟨ₖ K ⟩) (⟨ₛ T ⟩)
-         (pg_comp (comp_proc (phase (r_more D) K T)))
-| zip3_par : forall d1 d2 k1 k2 t1 t2 z1 z2,
-    zip3 d1 k1 t1 z1 ->
-    zip3 d2 k2 t2 z2 ->
-    zip3 (pg_par d1 d2) (pg_par k1 k2) (pg_par t1 t2) (pg_par z1 z2).
+(** A selection is found by search, not written out: [eauto with locc]
+    picks the leaf and the position within it.  [repeat econstructor] does
+    NOT do — it commits to the first applicable constructor and cannot undo
+    a wrong leaf, which is exactly what the second endpoint of a pair
+    needs. **)
+#[export] Hint Constructors picks kpick : locc.
 
 (** ** Side conditions of the distributed rules ***********************
 
@@ -171,41 +173,56 @@ Inductive zip3 : program -> program -> program -> program -> Prop :=
       longer mentions [wf_program].  All three checks stay syntactic.
 *********************************************************************)
 
-(** recv(K₁,…,K_N) and oread(K₁,…,K_N) of Definition 2.1(4), read off the
-    endpoints of the phase.  Every leaf of a phase is a bare communication
-    block, so its endpoints are all of its actions. **)
-Definition phase_recv (PK : program) : list var :=
-  flat_map caction_change (program_actions PK).
-Definition phase_oread (PK : program) : list var :=
-  flat_map caction_read (program_actions PK).
+(** A phase's endpoints, and its channels. **)
+Definition krow_actions (k : krow) : list caction := row_flat (fun K => K) k.
+Definition krow_chan    (k : krow) : list chan     := row_flat cblock_chan k.
 
-(** Comm-Select-MP.  Within this phase each channel carries one output and
-    one input, in two distinct leaves — so a matched selection is
-    unambiguous — and Definition 2.1(4) holds, which is what commutes the
-    selected rendezvous to the front of a terminal run.  Ownership is NOT
-    among these: a rendezvous acts as the identity on the quantum store. **)
-Definition wf_phase (PK : program) : Prop :=
-  wf_channels PK
-  /\ NoDup (phase_recv PK)
-  /\ disjoint (phase_recv PK) (phase_oread PK).
+(** recv(K₁,…,K_N) and oread(K₁,…,K_N) of Definition 2.1(4). **)
+Definition phase_recv (k : krow) : list var :=
+  flat_map caction_change (krow_actions k).
+Definition phase_oread (k : krow) : list var :=
+  flat_map caction_read (krow_actions k).
 
-(** Par-Comp-MP.  Ownership across the leaves commutes a local step of one
-    leaf past a rendezvous between two others, and the channel disjointness
-    stops the displayed phase from matching an endpoint that belongs to a
-    tail.  Neither clause recurses into PT: the tail carries its own
-    conditions inside its own premise. **)
-Definition wf_cut (PK PT P : program) : Prop :=
-  wf_ownership P /\ disjoint (program_chan PK) (program_chan PT).
+Definition krow_endpoints (k : krow) (c : chan) : list caction :=
+  filter (fun a => Nat.eqb (caction_chan a) c) (krow_actions k).
+
+(** Each channel of the phase carries one output and one input, in two
+    distinct leaves — [row_parties] counting the leaves is the paper's
+    i ≠ j.  So naming a channel already determines the matched pair. **)
+Definition wf_kchannels (k : krow) : Prop :=
+  forall c, In c (krow_chan k) ->
+    length (filter is_send (krow_endpoints k c)) = 1%nat
+    /\ length (filter (fun a => negb (is_send a)) (krow_endpoints k c)) = 1%nat
+    /\ row_parties cblock_chan k c = 2%nat.
+
+(** Comm-Select-MP's side condition: the phase is matched, and Definition
+    2.1(4) holds — which is what commutes the selected rendezvous to the
+    front of a terminal run.  Ownership is NOT among these: a rendezvous
+    acts as the identity on the quantum store. **)
+Definition wf_phase (k : krow) : Prop :=
+  wf_kchannels k
+  /\ NoDup (phase_recv k)
+  /\ disjoint (phase_recv k) (phase_oread k).
+
+(** Par-Comp-MP's side condition: the cut is legal.  Ownership across the
+    leaves commutes a local step of one leaf past a rendezvous between two
+    others, and the channel disjointness stops the displayed phase from
+    matching an endpoint that belongs to a tail.  Neither clause recurses
+    into the tail: it carries its own conditions inside its own premise. **)
+Definition wf_cut (k : krow) (t P : program) : Prop :=
+  wf_ownership P /\ disjoint (krow_chan k) (program_chan t).
 
 (** ** Helpers for Branch-Accum *************************************** *)
 
-(** Σ_{i∈J} A_i over a NON-EMPTY family (there is no zero predicate). **)
-Definition qsum {dim} (A0 : qpred dim) (As : list (qpred dim)) : qpred dim :=
-  fold_right q_add A0 As.
+(** Σ_{i∈J} A_i and ⋁_{i∈J} ψ_i.  Both fold over the whole family: [q_zero]
+    and false are the units, so there is no distinguished first member and
+    the empty family is allowed (it gives the vacuous triple {(φ,0)} P
+    {(false,B)}, whose two degrees are both 0). **)
+Definition qsum {dim} (As : list (qpred dim)) : qpred dim :=
+  fold_right q_add q_zero As.
 
-(** ⋁_{i∈J} ψ_i over a non-empty family. **)
-Definition fdisj (p0 : formula) (ps : list formula) : formula :=
-  fold_right f_or p0 ps.
+Definition fdisj (ps : list formula) : formula :=
+  fold_right f_or (f_bexp b_false) ps.
 
 (** ⊨ ¬(ψ_i ∧ ψ_j): the two guards never hold at the same store. **)
 Definition exclusive {dim} (Σ : interp dim) (p q : formula) : Prop :=
@@ -215,48 +232,106 @@ Definition exclusive {dim} (Σ : interp dim) (p q : formula) : Prop :=
 Definition mk_assertion {dim} (p : formula) (A : qpred dim) : assertion dim :=
   {| classical_part := p; quantum_part := A |}.
 
-(** ** The distributed proof system *********************************** *)
+(** ** The distributed proof system ***********************************
+
+      Three subjects, three judgments, in dependency order — none of them
+      recursive in another, so the soundness induction still runs over
+      [derivable] alone:
+
+        ⊢_D  on an lrow      Par-Disjoint-MP.  One rule, so a Definition
+        ⊢_K  on a krow       Comm-Done, Comm-Select-MP, Conseq
+        ⊢ₚ   on a program    Par-Comp-MP, Done, Branch-Accum, Conseq
+
+      Conseq is the only rule that has to be repeated: ⊢_D needs none (its
+      single rule hands the obligation to ⊢ₗ, which already has one) and
+      Branch-Accum is only ever used at whole-program level (Fig. 6, Step V).
+*********************************************************************)
+
+(** Par-Disjoint-MP.  [lrow_disj] is the paper's DisjMP({Dᵢ}) read straight
+    off the row's leaves; Theorem 2.1 ([wf_disj_footprints]) is what
+    discharges it for a cut of a well-formed program.
+
+    One rule, so this could have been a conjunction — but then applying
+    Par-Disjoint-MP would read as [split] and the rule would be invisible in
+    a derivation.  An inductive with a named constructor keeps
+    [apply rule_par_disjoint] in the proof script. **)
+Inductive dloc {dim} (Σ : interp dim)
+    : assertion dim -> lrow -> assertion dim -> Prop :=
+| rule_par_disjoint : forall Q R d,
+    lrow_disj d ->
+    Σ ⊢ₗ {{ Q }} lseq d {{ R }} ->
+    dloc Σ Q d R.
+
+Reserved Notation "Σ '⊢ₖ' '{{' Pre '}}' k '{{' Post '}}'"
+  (at level 70, Pre at level 99, k at level 99, Post at level 99).
+
+Inductive comm_derivable {dim} (Σ : interp dim)
+    : assertion dim -> krow -> assertion dim -> Prop :=
+(* Comm-Done: the phase is exhausted, every leaf being ε_K. *)
+| rule_comm_done : forall Q k,
+    row_all (fun K => K = ε) k ->
+    Σ ⊢ₖ {{ Q }} k {{ Q }}
+(* Comm-Select-MP: consume one matched pair (p.15).  Under [wf_phase] the
+   channel name already determines the pair, so there is nothing arbitrary
+   left in the selection. *)
+| rule_comm_select : forall Q R k kmid k' c e x,
+    wf_phase k ->
+    k    ∋ₖ c_send c e □ kmid ->
+    kmid ∋ₖ c_recv c x □ k'   ->
+    Σ ⊢ₖ {{ Q }} k' {{ R }} ->
+    Σ ⊢ₖ {{ assertion_subst Q x e }} k {{ R }}
+(* Conseq, as on the other two judgments. *)
+| rule_conseq_k : forall Q Q' R R' k,
+    Q' ⊨[Σ] Q ->
+    Σ ⊢ₖ {{ Q }} k {{ R }} ->
+    R ⊨[Σ] R' ->
+    wf_assertion Σ R' ->
+    Σ ⊢ₖ {{ Q' }} k {{ R' }}
+
+where "Σ '⊢ₖ' '{{' Pre '}}' k '{{' Post '}}'" := (comm_derivable Σ Pre k Post).
 
 Reserved Notation "Σ '⊢ₚ' '{{' Pre '}}' P '{{' Post '}}'"
   (at level 70, Pre at level 99, P at level 99, Post at level 99).
 
 Inductive derivable {dim} (Σ : interp dim)
     : assertion dim -> program -> assertion dim -> Prop :=
-(* Par-Disjoint-MP.  On a D-row [wf_ownership] IS DisjMP({Dᵢ}) — the two
-   read the same four footprint clauses off the same blocks
-   ([wf_ownership_disj_footprints]). *)
-| rule_par_disjoint : forall Q R PD Dseq,
-    wf_ownership PD ->
-    locals_seq PD Dseq ->
-    Σ ⊢ₗ {{ Q }} Dseq {{ R }} ->
-    Σ ⊢ₚ {{ Q }} PD {{ R }}
-(* Comm-Done. *)
-| rule_comm_done : forall Q PK,
-    all_comm_done PK ->
-    Σ ⊢ₚ {{ Q }} PK {{ Q }}
-(* Comm-Select-MP: consume one matched pair out of the current communication
-   phase (p.15).  [comm_sel] matches the phase leaf by leaf, as [zip3] does. *)
-| rule_comm_select : forall Q R PK P1 PK' c e x,
-    wf_phase PK ->
-    PK ∋ₖ c_send c e □ P1 ->
-    P1 ∋ₖ c_recv c x □ PK' ->
-    Σ ⊢ₚ {{ Q }} PK' {{ R }} ->
-    Σ ⊢ₚ {{ assertion_subst Q x e }} PK {{ R }}
-(* Par-Comp-MP. *)
-| rule_par_comp : forall Q0 Q1 Q2 Q3 PD PK PT P,
-    zip3 PD PK PT P ->
-    wf_cut PK PT P ->
-    Σ ⊢ₚ {{ Q0 }} PD {{ Q1 }} ->
-    Σ ⊢ₚ {{ Q1 }} PK {{ Q2 }} ->
-    Σ ⊢ₚ {{ Q2 }} PT {{ Q3 }} ->
+(* Par-Comp-MP.  [cut P] reduces on a concrete program, so the first
+   premise is closed by reflexivity and the three rows are read off rather
+   than supplied. *)
+| rule_par_comp : forall Q0 Q1 Q2 Q3 P d k t,
+    cut P = (d, k, t) ->
+    wf_cut k t P ->
+    dloc Σ Q0 d Q1 ->
+    Σ ⊢ₖ {{ Q1 }} k {{ Q2 }} ->
+    Σ ⊢ₚ {{ Q2 }} t {{ Q3 }} ->
     Σ ⊢ₚ {{ Q0 }} P {{ Q3 }}
+(* Done: a terminated program does nothing.  The base case of Par-Comp's
+   recursion down the tails — [cut] pads a terminated leaf to itself, so
+   without this the rule would recurse forever. *)
+| rule_done : forall Q P,
+    prog_terminated P ->
+    Σ ⊢ₚ {{ Q }} P {{ Q }}
 (* Branch-Accum. *)
-| rule_branch_accum : forall phi B P A0 psi0 fam,
-    Σ ⊢ₚ {{ mk_assertion phi A0 }} P {{ mk_assertion psi0 B }} ->
-    Forall (fun Api => Σ ⊢ₚ {{ mk_assertion phi (fst Api) }} P {{ mk_assertion (snd Api) B }}) fam ->
-    ForallOrdPairs (exclusive Σ) (psi0 :: map snd fam) ->
-    Σ ⊢ₚ {{ mk_assertion phi (qsum A0 (map fst fam)) }} P
-        {{ mk_assertion (fdisj psi0 (map snd fam)) B }}
+| rule_branch_accum : forall phi B P fam,
+    Forall (fun Api => Σ ⊢ₚ {{ mk_assertion phi (fst Api) }} P
+                           {{ mk_assertion (snd Api) B }}) fam ->
+    ForallOrdPairs (exclusive Σ) (map snd fam) ->
+    Σ ⊢ₚ {{ mk_assertion phi (qsum (map fst fam)) }} P
+        {{ mk_assertion (fdisj (map snd fam)) B }}
+(* Aux-Subst.  A classical variable the program never reads and never writes
+   is an AUXILIARY variable: the triple holds whatever its value, so it may
+   be replaced by any value throughout.
+
+   This is what turns QHL+'s (Axiom-Meas) into a branch.  That axiom names
+   the outcome with a fresh y and its freshness condition forbids the
+   precondition from saying what y is, so on its own it can only ever
+   conclude "m = y".  Substituting a value for y afterwards gives "m = 0",
+   and only literal guards like that are mutually exclusive — which is
+   exactly what Branch-Accum asks of its family. *)
+| rule_aux_subst : forall Q R P y (v : val),
+    ~ In y (program_cvar P) ->
+    Σ ⊢ₚ {{ Q }} P {{ R }} ->
+    Σ ⊢ₚ {{ assertion_subst Q y (e_val v) }} P {{ assertion_subst R y (e_val v) }}
 (* Conseq (same wf_assertion side condition as the local rule). *)
 | rule_conseq_d : forall Q Q' R R' P,
     Q' ⊨[Σ] Q ->

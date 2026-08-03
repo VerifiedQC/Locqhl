@@ -293,7 +293,7 @@ Lemma qpred_denote_subst :
     = qpred_denote Σ (s [ x |-> eval_expr (i_fn Σ) s t ]) A.
 Proof.
   intros dim Σ s x t A;
-    induction A as [f args | g args A' IH | A1 IH1 A2 IH2]; simpl.
+    induction A as [f args | g args A' IH | A1 IH1 A2 IH2 |]; simpl.
   - f_equal. rewrite map_map. apply map_ext. intro e0. apply eval_expr_subst.
   - rewrite IH.
     assert (HK : map (eval_expr (i_fn Σ) s) (map (fun e => expr_subst e x t) args)
@@ -301,6 +301,7 @@ Proof.
     { rewrite map_map. apply map_ext. intro e0. apply eval_expr_subst. }
     rewrite HK. reflexivity.
   - now rewrite IH1, IH2.
+  - reflexivity.                      (* q_zero: substitution leaves 0 alone *)
 Qed.
 
 Lemma degree_subst :

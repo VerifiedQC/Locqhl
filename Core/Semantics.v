@@ -21,25 +21,17 @@ Record interp (dim : nat) := {
 }.
 Arguments i_fn {dim}. Arguments i_rl {dim}. Arguments i_uu {dim}. Arguments i_mm {dim}.
 
-(** Selecting one endpoint out of an unordered comm block:  K = a □ K'. **)
-Definition selects (K : cblock) (a : caction) (K' : cblock) : Prop :=
-  exists pre post, K = pre ++ a :: post /\ K' = pre ++ post.
+(** Σ is standard on the three comparison symbols of Syntax when it reads
+    them the way their names promise.  Protocol guards are written with
+    [b_eq]/[b_lt]/[b_gt], so a case study that needs to evaluate a guard
+    assumes this of its Σ and nothing else about the relation alphabet.
 
-Notation "K '∋' a '□' K'" := (selects K a K')
-  (at level 70, a at level 60).
-
-
-(** Rebuild a process from its head phase after a step, applying BOTH
-    structural erasures of the paper at once:
-      ↓ ; T   ≡ T   (the local block has finished)
-      ε_K ; T ≡ T   (the communication block is exhausted)
-    When both hold the phase itself is over, so it is dropped and the process
-    continues with its next phase. **)
-Definition advance (R : residual) (K : cblock) (S : process) : process :=
-  match R, K with
-  | r_done, []     => S             (* phase complete → on to the next one *)
-  | _     , _      => phase R K S
-  end.
+    Note the explicit [cons]: a bare [ .. ; .. ] right after a term is read
+    as SemanticDomain's store update s[x |-> v]. **)
+Definition standard_rels {dim} (Σ : interp dim) : Prop :=
+  (forall a b, i_rl Σ r_eq (cons a (cons b nil)) = Nat.eqb a b)
+  /\ (forall a b, i_rl Σ r_lt (cons a (cons b nil)) = Nat.ltb a b)
+  /\ (forall a b, i_rl Σ r_gt (cons a (cons b nil)) = Nat.ltb b a).
 
 Reserved Notation "Σ '⊳' '‹' L ',' E '›' '→ₗ' G"
   (at level 70, L at level 99, E at level 99).
@@ -79,54 +71,55 @@ Inductive local_step {dim} (Σ : interp dim)
 where "Σ '⊳' '‹' L ',' E '›' '→ₗ' G" := (local_step Σ L E G).
 
 (** ** Distributed step (Fig. 2(b)).
-      ds_local       one local ensemble step at a leaf (via its reading)
+      ds_local       one local ensemble step at a leaf
       ds_par_l/r     the step happens inside one subtree
       ds_comm_lr/rl  one atomic rendezvous; the sender and receiver leaves
                      are located by [replace_leaf] in the two subtrees of
-                     their least common ∥ node **)
+                     their least common ∥ node
+
+    A leaf now IS a process, so each rule matches the leaf's head phase
+    directly instead of asking what a component reads as.  Every residual
+    leaf is rebuilt with [advance], which is what keeps the ε_K erasure of
+    p.7 true of reachable programs: a leaf never carries an exhausted
+    phase ↓;ε_K, since [advance] drops it. **)
 Inductive distri_step {dim} (Σ : interp dim)
     : program -> ensemble dim -> distri_config dim -> Prop :=
 (* (Local) at a leaf *)
-| ds_local : forall (C : component) (L : lblock) (K : cblock) (S : process)
+| ds_local : forall (L : lblock) (K : cblock) (T : process)
                     (E : ensemble dim) (Gl : local_config dim),
-    read_component C = phase (r_more L) K S ->
     Σ ⊳ ‹ L, E › →ₗ Gl ->
-    Σ ⊳ ‹ pg_comp C, E › ⇝
-      map (fun c => (pg_comp (comp_proc (advance (fst c) K S)), snd c)) Gl
+    Σ ⊳ ‹ ⟨ phase (r_more L) K T ⟩, E › ⇝
+      map (fun c => (⟨ advance (fst c) K T ⟩, snd c)) Gl
 (* the step happens in the left / right subtree *)
 | ds_par_l : forall (P1 P2 : program) (E : ensemble dim) (G1 : distri_config dim),
     Σ ⊳ ‹ P1, E › ⇝ G1 ->
-    Σ ⊳ ‹ pg_par P1 P2, E › ⇝
-      map (fun c => (pg_par (fst c) P2, snd c)) G1
+    Σ ⊳ ‹ P1 ∥ P2, E › ⇝
+      map (fun c => (fst c ∥ P2, snd c)) G1
 | ds_par_r : forall (P1 P2 : program) (E : ensemble dim) (G2 : distri_config dim),
     Σ ⊳ ‹ P2, E › ⇝ G2 ->
-    Σ ⊳ ‹ pg_par P1 P2, E › ⇝
-      map (fun c => (pg_par P1 (fst c), snd c)) G2
+    Σ ⊳ ‹ P1 ∥ P2, E › ⇝
+      map (fun c => (P1 ∥ fst c, snd c)) G2
 (* (Communicate): sender leaf in the left subtree, receiver in the right *)
-| ds_comm_lr : forall (P1 P1' P2 P2' : program) (Cs Cr : component)
-                      (Ks Ks' Kr Kr' : cblock) (Ss Sr : process)
+| ds_comm_lr : forall (P1 P1' P2 P2' : program)
+                      (Ks Ks' Kr Kr' : cblock) (Ts Tr : process)
                       (c : chan) (e : expr) (x : var) (E : ensemble dim),
-    read_component Cs = phase ↓ Ks Ss ->
-    read_component Cr = phase ↓ Kr Sr ->
     Ks ∋ c_send c e □ Ks' ->
     Kr ∋ c_recv c x □ Kr' ->
-    replace_leaf Cs (comp_proc (advance ↓ Ks' Ss)) P1 P1' ->
-    replace_leaf Cr (comp_proc (advance ↓ Kr' Sr)) P2 P2' ->
-    Σ ⊳ ‹ pg_par P1 P2, E › ⇝
-      {|| pg_par P1' P2',
+    replace_leaf (phase ↓ Ks Ts) (advance ↓ Ks' Ts) P1 P1' ->
+    replace_leaf (phase ↓ Kr Tr) (advance ↓ Kr' Tr) P2 P2' ->
+    Σ ⊳ ‹ P1 ∥ P2, E › ⇝
+      {|| P1' ∥ P2',
         map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E ||}
 (* (Communicate): sender leaf in the right subtree, receiver in the left *)
-| ds_comm_rl : forall (P1 P1' P2 P2' : program) (Cs Cr : component)
-                      (Ks Ks' Kr Kr' : cblock) (Ss Sr : process)
+| ds_comm_rl : forall (P1 P1' P2 P2' : program)
+                      (Ks Ks' Kr Kr' : cblock) (Ts Tr : process)
                       (c : chan) (e : expr) (x : var) (E : ensemble dim),
-    read_component Cs = phase ↓ Ks Ss ->
-    read_component Cr = phase ↓ Kr Sr ->
     Ks ∋ c_send c e □ Ks' ->
     Kr ∋ c_recv c x □ Kr' ->
-    replace_leaf Cs (comp_proc (advance ↓ Ks' Ss)) P2 P2' ->
-    replace_leaf Cr (comp_proc (advance ↓ Kr' Sr)) P1 P1' ->
-    Σ ⊳ ‹ pg_par P1 P2, E › ⇝
-      {|| pg_par P1' P2',
+    replace_leaf (phase ↓ Ks Ts) (advance ↓ Ks' Ts) P2 P2' ->
+    replace_leaf (phase ↓ Kr Tr) (advance ↓ Kr' Tr) P1 P1' ->
+    Σ ⊳ ‹ P1 ∥ P2, E › ⇝
+      {|| P1' ∥ P2',
         map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E ||}
 where "Σ '⊳' '‹' D ',' E '›' '⇝' G" := (distri_step Σ D E G).
 

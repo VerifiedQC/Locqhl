@@ -85,15 +85,18 @@ Fixpoint formula_holds {dim} (Σ : interp dim) (s : store) (p : formula) : bool 
 Inductive qpred (dim : nat) : Type :=
 | q_op   : (list val -> option (Square (2 ^ dim))) -> list expr -> qpred dim
 | q_conj : (list val -> Square (2 ^ dim)) -> list expr -> qpred dim -> qpred dim
-| q_add  : qpred dim -> qpred dim -> qpred dim.   (* A + B, for Branch-Accum *)
+| q_add  : qpred dim -> qpred dim -> qpred dim    (* A + B, for Branch-Accum *)
+| q_zero : qpred dim.                             (* 0, the unit of q_add   *)
 
 Arguments q_op {dim}. Arguments q_conj {dim}. Arguments q_add {dim}.
+Arguments q_zero {dim}.
 
 Fixpoint qpred_vars {dim} (A : qpred dim) : list var :=
   match A with
   | q_op _ args      => flat_map expr_vars args
   | q_conj _ args A' => flat_map expr_vars args ++ qpred_vars A'
   | q_add A1 A2      => qpred_vars A1 ++ qpred_vars A2
+  | q_zero           => []
   end.
 
 Fixpoint qpred_subst {dim} (A : qpred dim) (x : var) (t : expr) : qpred dim :=
@@ -102,6 +105,7 @@ Fixpoint qpred_subst {dim} (A : qpred dim) (x : var) (t : expr) : qpred dim :=
   | q_conj g args A' => q_conj g (map (fun e => expr_subst e x t) args)
                                 (qpred_subst A' x t)
   | q_add A1 A2      => q_add (qpred_subst A1 x t) (qpred_subst A2 x t)
+  | q_zero           => q_zero
   end.
 
 (** ⟦A⟧_σ **)
@@ -120,6 +124,7 @@ Fixpoint qpred_denote {dim} (Σ : interp dim) (s : store) (A : qpred dim)
       | Some M1, Some M2 => Some (M1 .+ M2)%M
       | _, _             => None        (* a sum is undefined if a summand is *)
       end
+  | q_zero => Some (@Zero (2 ^ dim) (2 ^ dim))
   end.
 
 (** ** cq-assertions ************************************************** *)

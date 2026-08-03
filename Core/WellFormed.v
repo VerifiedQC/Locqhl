@@ -7,6 +7,10 @@
                   a communication input)
       read(P)     classical variables read by expressions or control guards
       channel(P)  channels occurring in P
+
+      A row's footprint is its leaves' footprints collected left to right,
+      i.e. [row_flat] of the leaf-level notion — so nothing below is written
+      out twice for the D-, K- and program rows.
 ** **)
 From Stdlib Require Import Lists.List.
 From Stdlib Require Import Arith.PeanoNat.
@@ -62,7 +66,7 @@ Definition cblock_change (K : cblock) : list var := flat_map caction_change K.
 Definition cblock_read   (K : cblock) : list var := flat_map caction_read K.
 Definition cblock_chan   (K : cblock) : list chan := map caction_chan K.
 
-(** ** Footprints of a process and of a program ** **)
+(** ** Footprints of a process ** **)
 Definition residual_change (R : residual) : list var :=
   match R with r_done => [] | r_more L => lblock_change L end.
 Definition residual_read (R : residual) : list var :=
@@ -98,57 +102,32 @@ Fixpoint process_chan (p : process) : list chan :=
 Definition process_cvar (p : process) : list var :=
   process_change p ++ process_read p.
 
-(** ** Footprints of a component, through its reading. ** **)
-Definition comp_change (C : component) : list var  := process_change (read_component C).
-Definition comp_cvar   (C : component) : list var  := process_cvar   (read_component C).
-Definition comp_qvar   (C : component) : list qvar := process_qvar   (read_component C).
-Definition comp_chan   (C : component) : list chan := process_chan   (read_component C).
-
-(** A bare communication leaf reads as ↓;K;↓, so its footprints are K's. **)
-Lemma comm_leaf_change : forall K,
-    process_change (read_component (comp_comm K)) = cblock_change K.
-Proof. destruct K; simpl; rewrite ?app_nil_r; reflexivity. Qed.
-
-Lemma comm_leaf_read : forall K,
-    process_read (read_component (comp_comm K)) = cblock_read K.
-Proof. destruct K; simpl; rewrite ?app_nil_r; reflexivity. Qed.
-
-Lemma comm_leaf_qvar : forall K,
-    process_qvar (read_component (comp_comm K)) = [].
-Proof. destruct K; reflexivity. Qed.
-
-Lemma comm_leaf_chan : forall K,
-    process_chan (read_component (comp_comm K)) = cblock_chan K.
-Proof. destruct K; simpl; rewrite ?app_nil_r; reflexivity. Qed.
+(** All communication actions of a process. **)
+Fixpoint process_actions (p : process) : list caction :=
+  match p with
+  | terminated   => []
+  | phase _ K p' => K ++ process_actions p'
+  end.
 
 (** ** Footprints of a program ** **)
-Fixpoint program_change (P : program) : list var :=
-  match P with
-  | pg_comp C    => comp_change C
-  | pg_par P1 P2 => program_change P1 ++ program_change P2
-  end.
-Fixpoint program_cvar (P : program) : list var :=
-  match P with
-  | pg_comp C    => comp_cvar C
-  | pg_par P1 P2 => program_cvar P1 ++ program_cvar P2
-  end.
-Fixpoint program_qvar (P : program) : list qvar :=
-  match P with
-  | pg_comp C    => comp_qvar C
-  | pg_par P1 P2 => program_qvar P1 ++ program_qvar P2
-  end.
-Fixpoint program_chan (P : program) : list chan :=
-  match P with
-  | pg_comp C    => comp_chan C
-  | pg_par P1 P2 => program_chan P1 ++ program_chan P2
+Definition program_change  (P : program) : list var     := row_flat process_change  P.
+Definition program_read    (P : program) : list var     := row_flat process_read    P.
+Definition program_cvar    (P : program) : list var     := row_flat process_cvar    P.
+Definition program_qvar    (P : program) : list qvar    := row_flat process_qvar    P.
+Definition program_chan    (P : program) : list chan    := row_flat process_chan    P.
+Definition program_actions (P : program) : list caction := row_flat process_actions P.
+
+(** |parties_P(c)| — how many leaves mention channel c.  Stated for any row
+    with a notion of "the channels of a leaf", since the proof system asks
+    the same question of a communication phase (a K-row). **)
+Fixpoint row_parties {A} (chans : A -> list chan) (r : row A) (c : chan) : nat :=
+  match r with
+  | leaf a    => if existsb (Nat.eqb c) (chans a) then 1 else 0
+  | par r1 r2 => row_parties chans r1 c + row_parties chans r2 c
   end.
 
-(** |parties_P(c)| — how many leaves mention channel c. **)
-Fixpoint parties (P : program) (c : chan) : nat :=
-  match P with
-  | pg_comp C    => if existsb (Nat.eqb c) (comp_chan C) then 1 else 0
-  | pg_par P1 P2 => parties P1 c + parties P2 c
-  end.
+Definition parties (P : program) (c : chan) : nat :=
+  row_parties process_chan P c.
 
 (** ** DisjMP — disjoint footprints of communication-free local blocks **)
 (** The pairwise non-interference condition on two local blocks. It is
@@ -163,6 +142,10 @@ Definition non_interfering (Di Dj : lblock) : Prop :=
 Definition DisjMP (Ds : list lblock) : Prop :=
   ForallOrdPairs non_interfering Ds.
 
+(** Par-Disjoint-MP's side condition, on the D-row itself: the paper's
+    DisjMP({Dᵢ}) with the Dᵢ read straight off the row's leaves. **)
+Definition lrow_disj (d : lrow) : Prop := DisjMP (row_leaves d).
+
 (** ** Well-formedness of a distributed program ********************** *)
 
 (** Ownership: at every ∥ node the two subtrees own disjoint state. **)
@@ -173,8 +156,8 @@ Definition cross_disjoint (P1 P2 : program) : Prop :=
 
 Fixpoint wf_ownership (P : program) : Prop :=
   match P with
-  | pg_comp _    => True
-  | pg_par P1 P2 => wf_ownership P1 /\ wf_ownership P2 /\ cross_disjoint P1 P2
+  | leaf _    => True
+  | par P1 P2 => wf_ownership P1 /\ wf_ownership P2 /\ cross_disjoint P1 P2
   end.
 
 (** The k-th communication block of a process; processes with fewer phases
@@ -186,39 +169,14 @@ Fixpoint comm_at (p : process) (k : nat) : cblock :=
   | phase _ _ p',  S k' => comm_at p' k'
   end.
 
-(** The k-th communication PHASE of a program: the k-th block of every
-    leaf, padded. **)
-Fixpoint phase_at (P : program) (k : nat) : list cblock :=
-  match P with
-  | pg_comp C    => [comm_at (read_component C) k]
-  | pg_par P1 P2 => phase_at P1 k ++ phase_at P2 k
-  end.
+(** The k-th communication PHASE of a program is a K-ROW: the k-th block of
+    every leaf, padded.  Reading a program's phase is [row_map], not a
+    predicate that has to be discharged. **)
+Definition phase_row (P : program) (k : nat) : krow :=
+  row_map (fun T => comm_at T k) P.
 
-(** All communication actions of a process / of a program. **)
-Fixpoint process_actions (p : process) : list caction :=
-  match p with
-  | terminated   => []
-  | phase _ K p' => K ++ process_actions p'
-  end.
-
-Fixpoint program_actions (P : program) : list caction :=
-  match P with
-  | pg_comp C    => process_actions (read_component C)
-  | pg_par P1 P2 => program_actions P1 ++ program_actions P2
-  end.
-
-(** A bare communication leaf exposes K as its phase 0 and nothing after. **)
-Lemma comm_leaf_actions : forall K,
-    process_actions (read_component (comp_comm K)) = K.
-Proof. destruct K; simpl; rewrite ?app_nil_r; reflexivity. Qed.
-
-Lemma comm_leaf_comm_at0 : forall K,
-    comm_at (read_component (comp_comm K)) 0 = K.
-Proof. destruct K; reflexivity. Qed.
-
-Lemma comm_leaf_comm_at_S : forall K k,
-    comm_at (read_component (comp_comm K)) (S k) = [].
-Proof. destruct K; reflexivity. Qed.
+Definition phase_at (P : program) (k : nat) : list cblock :=
+  row_leaves (phase_row P k).
 
 (** Logical channels: every channel carries exactly one output and one
     input endpoint, in two distinct leaves. **)
@@ -271,7 +229,7 @@ Lemma output_reads_concat : forall Ks,
 Proof. intro Ks. apply (flat_map_concat_flat caction_read Ks). Qed.
 
 (** Channels are the channel names of the actions — [process_chan] and
-    [program_chan] are [caction_chan] read off [process_actions]. **)
+    [program_chan] are [caction_chan] read off the actions. **)
 Lemma process_chan_actions : forall p,
     process_chan p = map caction_chan (process_actions p).
 Proof.
@@ -282,9 +240,17 @@ Qed.
 Lemma program_chan_actions : forall P,
     program_chan P = map caction_chan (program_actions P).
 Proof.
-  induction P as [C | P1 IH1 P2 IH2]; simpl.
-  - unfold comp_chan. apply process_chan_actions.
+  unfold program_chan, program_actions.
+  induction P as [T | P1 IH1 P2 IH2]; simpl.
+  - apply process_chan_actions.
   - rewrite map_app, IH1, IH2; reflexivity.
+Qed.
+
+(** A phase's blocks are its leaves' k-th blocks. **)
+Lemma phase_at_leaves : forall P k,
+    phase_at P k = map (fun T => comm_at T k) (row_leaves P).
+Proof.
+  intros P k. unfold phase_at, phase_row. apply row_leaves_map.
 Qed.
 
 (** "No endpoint on c" as a filter and as a membership. **)
@@ -340,52 +306,23 @@ Proof.
 Qed.
 
 (** A leaf's party count only depends on whether it mentions c at all. **)
-Lemma parties_leaf_eq : forall (C1 C2 : component) (c : chan),
-    (In c (comp_chan C1) <-> In c (comp_chan C2)) ->
-    parties (pg_comp C1) c = parties (pg_comp C2) c.
+Lemma parties_leaf_eq : forall (T1 T2 : process) (c : chan),
+    (In c (process_chan T1) <-> In c (process_chan T2)) ->
+    parties (leaf T1) c = parties (leaf T2) c.
 Proof.
-  intros C1 C2 c Hiff. cbn [parties].
+  intros T1 T2 c Hiff. unfold parties; cbn [row_parties].
   match goal with
   | |- (if ?b1 then _ else _) = (if ?b2 then _ else _) =>
       destruct b1 eqn:E1; destruct b2 eqn:E2
   end; try reflexivity; exfalso.
-  - apply (proj1 (existsb_eqb_true_iff c (comp_chan C1))) in E1.
+  - apply (proj1 (existsb_eqb_true_iff c (process_chan T1))) in E1.
     apply Hiff in E1.
-    apply (proj2 (existsb_eqb_true_iff c (comp_chan C2))) in E1.
+    apply (proj2 (existsb_eqb_true_iff c (process_chan T2))) in E1.
     rewrite E1 in E2; discriminate.
-  - apply (proj1 (existsb_eqb_true_iff c (comp_chan C2))) in E2.
+  - apply (proj1 (existsb_eqb_true_iff c (process_chan T2))) in E2.
     apply Hiff in E2.
-    apply (proj2 (existsb_eqb_true_iff c (comp_chan C1))) in E2.
+    apply (proj2 (existsb_eqb_true_iff c (process_chan T1))) in E2.
     rewrite E2 in E1; discriminate.
-Qed.
-
-(** So when the OTHER row's part of a leaf is c-free, the two readings of that
-    leaf count c the same. **)
-Lemma comm_leaf_parties : forall (K : cblock) (T : process) (D : lblock) (c : chan),
-    ~ In c (process_chan T) ->
-    parties (pg_comp (comp_comm K)) c
-    = parties (pg_comp (comp_proc (phase (r_more D) K T))) c.
-Proof.
-  intros K T D c HT. apply parties_leaf_eq.
-  unfold comp_chan. rewrite comm_leaf_chan.
-  change (process_chan (read_component (comp_proc (phase (r_more D) K T))))
-    with (cblock_chan K ++ process_chan T).
-  split; [intro H; apply in_or_app; left; exact H |].
-  intro H; apply in_app_or in H as [H | H]; [exact H | exfalso; exact (HT H)].
-Qed.
-
-Lemma tail_leaf_parties : forall (K : cblock) (T : process) (D : lblock) (c : chan),
-    ~ In c (cblock_chan K) ->
-    parties (pg_comp (comp_proc T)) c
-    = parties (pg_comp (comp_proc (phase (r_more D) K T))) c.
-Proof.
-  intros K T D c HK. apply parties_leaf_eq.
-  unfold comp_chan.
-  change (process_chan (read_component (comp_proc T))) with (process_chan T).
-  change (process_chan (read_component (comp_proc (phase (r_more D) K T))))
-    with (cblock_chan K ++ process_chan T).
-  split; [intro H; apply in_or_app; right; exact H |].
-  intro H; apply in_app_or in H as [H | H]; [exfalso; exact (HK H) | exact H].
 Qed.
 
 (** A well-formed LOCC distributed program (Definition 2.1). **)
@@ -397,7 +334,8 @@ Definition wf_program (P : program) : Prop :=
     The paper cuts one communication-free local block Dᵢ out of each process
     Sᵢ — the padded case being skip — and claims DisjMP({Dᵢ}).  An [lblock]
     holds no endpoints by construction, so only "occurring in Sᵢ" is left to
-    state. **)
+    state.  The chosen blocks form an lrow of the SAME SHAPE as the program,
+    which is what [local_row] records. **)
 
 (** D is the local block of one of p's phases. **)
 Fixpoint block_in (D : lblock) (p : process) : Prop :=
@@ -407,20 +345,19 @@ Fixpoint block_in (D : lblock) (p : process) : Prop :=
   end.
 
 (** What one leaf may contribute to the row: a block of its own, or skip. **)
-Definition leaf_block (C : component) (D : lblock) : Prop :=
-  D = l_skip \/ block_in D (read_component C).
+Definition leaf_block (T : process) (D : lblock) : Prop :=
+  D = l_skip \/ block_in D T.
 
-(** [local_row P Ds]: Ds is one such block per leaf, left to right — the
-    D-row of Par-Comp-MP.  A leaf [⟨ₗ D ⟩] reads as [phase (r_more D) ε ↓],
-    so a whole D-row program is an instance. **)
-Inductive local_row : program -> list lblock -> Prop :=
-| lrow_leaf : forall C D,
-    leaf_block C D ->
-    local_row (pg_comp C) [D]
-| lrow_par : forall P1 P2 Ds1 Ds2,
-    local_row P1 Ds1 ->
-    local_row P2 Ds2 ->
-    local_row (pg_par P1 P2) (Ds1 ++ Ds2).
+(** [local_row P d]: d is one such block per leaf — the D-row of
+    Par-Comp-MP, shaped like P. **)
+Inductive local_row : program -> lrow -> Prop :=
+| lrow_leaf : forall T D,
+    leaf_block T D ->
+    local_row (leaf T) (leaf D)
+| lrow_par : forall P1 P2 d1 d2,
+    local_row P1 d1 ->
+    local_row P2 d2 ->
+    local_row (par P1 P2) (par d1 d2).
 
 (** Footprint monotonicity: a phase's block touches only what its process
     touches. **)
@@ -456,48 +393,52 @@ Qed.
 
 Lemma program_change_cvar : forall P, incl (program_change P) (program_cvar P).
 Proof.
-  induction P as [C | P1 IH1 P2 IH2]; simpl.
-  - unfold comp_change, comp_cvar, process_cvar. apply incl_appl, incl_refl.
+  unfold program_change, program_cvar.
+  induction P as [T | P1 IH1 P2 IH2]; simpl.
+  - unfold process_cvar. apply incl_appl, incl_refl.
   - apply incl_app; [ apply incl_appl, IH1 | apply incl_appr, IH2 ].
 Qed.
 
 (** …and hence a whole row: every block in it is bounded by its program. **)
-Lemma local_row_change : forall P Ds,
-    local_row P Ds -> forall D, In D Ds -> incl (lblock_change D) (program_change P).
+Lemma local_row_change : forall P d,
+    local_row P d ->
+    forall D, In D (row_leaves d) -> incl (lblock_change D) (program_change P).
 Proof.
-  induction 1 as [C D0 Hleaf | P1 P2 Ds1 Ds2 H1 IH1 H2 IH2]; intros D HIn.
+  induction 1 as [T D0 Hleaf | P1 P2 d1 d2 H1 IH1 H2 IH2]; intros D HIn.
   - destruct HIn as [Heq | []]; subst D0.
     destruct Hleaf as [Hskip | Hb].
     + subst D; apply incl_nil_l.
-    + unfold program_change, comp_change; apply block_in_change, Hb.
-  - simpl; apply in_app_or in HIn as [HIn | HIn].
+    + unfold program_change; simpl; apply block_in_change, Hb.
+  - unfold program_change in *; simpl; apply in_app_or in HIn as [HIn | HIn].
     + apply incl_appl, IH1, HIn.
     + apply incl_appr, IH2, HIn.
 Qed.
 
-Lemma local_row_read : forall P Ds,
-    local_row P Ds -> forall D, In D Ds -> incl (lblock_read D) (program_cvar P).
+Lemma local_row_read : forall P d,
+    local_row P d ->
+    forall D, In D (row_leaves d) -> incl (lblock_read D) (program_cvar P).
 Proof.
-  induction 1 as [C D0 Hleaf | P1 P2 Ds1 Ds2 H1 IH1 H2 IH2]; intros D HIn.
+  induction 1 as [T D0 Hleaf | P1 P2 d1 d2 H1 IH1 H2 IH2]; intros D HIn.
   - destruct HIn as [Heq | []]; subst D0.
     destruct Hleaf as [Hskip | Hb].
     + subst D; apply incl_nil_l.
-    + unfold program_cvar, comp_cvar, process_cvar.
+    + unfold program_cvar; simpl; unfold process_cvar.
       apply incl_appr, block_in_read, Hb.
-  - simpl; apply in_app_or in HIn as [HIn | HIn].
+  - unfold program_cvar in *; simpl; apply in_app_or in HIn as [HIn | HIn].
     + apply incl_appl, IH1, HIn.
     + apply incl_appr, IH2, HIn.
 Qed.
 
-Lemma local_row_qvar : forall P Ds,
-    local_row P Ds -> forall D, In D Ds -> incl (lblock_qvar D) (program_qvar P).
+Lemma local_row_qvar : forall P d,
+    local_row P d ->
+    forall D, In D (row_leaves d) -> incl (lblock_qvar D) (program_qvar P).
 Proof.
-  induction 1 as [C D0 Hleaf | P1 P2 Ds1 Ds2 H1 IH1 H2 IH2]; intros D HIn.
+  induction 1 as [T D0 Hleaf | P1 P2 d1 d2 H1 IH1 H2 IH2]; intros D HIn.
   - destruct HIn as [Heq | []]; subst D0.
     destruct Hleaf as [Hskip | Hb].
     + subst D; apply incl_nil_l.
-    + unfold program_qvar, comp_qvar; apply block_in_qvar, Hb.
-  - simpl; apply in_app_or in HIn as [HIn | HIn].
+    + unfold program_qvar; simpl; apply block_in_qvar, Hb.
+  - unfold program_qvar in *; simpl; apply in_app_or in HIn as [HIn | HIn].
     + apply incl_appl, IH1, HIn.
     + apply incl_appr, IH2, HIn.
 Qed.
@@ -525,13 +466,14 @@ Qed.
 (** Theorem 2.1.  The induction runs on ownership alone: [wf_channels] is
     NOT inherited by a subtree (a channel's two endpoints straddle the ∥),
     so it cannot appear in the induction hypothesis. **)
-Lemma wf_ownership_disj_footprints : forall (P : program) (Ds : list lblock),
-    wf_ownership P -> local_row P Ds -> DisjMP Ds.
+Lemma wf_ownership_disj_footprints : forall (P : program) (d : lrow),
+    wf_ownership P -> local_row P d -> lrow_disj d.
 Proof.
-  intros P Ds Hown Hrow; revert Hown.
-  induction Hrow as [C D0 Hleaf | P1 P2 Ds1 Ds2 H1 IH1 H2 IH2]; intros Hown.
+  intros P d Hown Hrow; revert Hown.
+  induction Hrow as [T D0 Hleaf | P1 P2 d1 d2 H1 IH1 H2 IH2]; intros Hown.
   - repeat constructor.
   - destruct Hown as (Ho1 & Ho2 & Hc12 & Hc21 & Hq).
+    unfold lrow_disj, DisjMP in *; simpl.
     apply ForallOrdPairs_app; [ apply IH1, Ho1 | apply IH2, Ho2 |].
     intros Di Dj HDi HDj; repeat split.
     + eapply disjoint_incl;
@@ -553,8 +495,8 @@ Proof.
         | eapply local_row_qvar; eassumption ].
 Qed.
 
-Theorem wf_disj_footprints : forall (P : program) (Ds : list lblock),
-    wf_program P -> local_row P Ds -> DisjMP Ds.
+Theorem wf_disj_footprints : forall (P : program) (d : lrow),
+    wf_program P -> local_row P d -> lrow_disj d.
 Proof.
-  intros P Ds (Hown & _ & _). apply wf_ownership_disj_footprints, Hown.
+  intros P d (Hown & _ & _). apply wf_ownership_disj_footprints, Hown.
 Qed.
