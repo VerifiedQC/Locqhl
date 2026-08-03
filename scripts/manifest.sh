@@ -31,6 +31,19 @@ for f in Core/*.v; do
       match($0, kw "[[:space:]]+[A-Za-z0-9_'"'"']+");
       t=substr($0, RSTART, RLENGTH); sub(/^[A-Za-z]+[[:space:]]+/, "", t); return t;
     }
+    # Track (* .. *) comment nesting so prose like "Lemma 2 commutes ..." inside
+    # a comment is never mistaken for a statement header. A line that starts
+    # inside a comment is skipped; if the comment closes mid-line, the tail
+    # after the last *) is still processed.
+    {
+      d0 = depth;
+      depth += gsub(/\(\*/, "(*") - gsub(/\*\)/, "*)");
+      if (depth < 0) depth = 0;
+      if (d0 > 0) {
+        if (depth > 0) next;
+        sub(/^.*\*\)/, "");
+      }
+    }
     # Statement headers that carry a proof obligation.
     /^[[:space:]]*(Lemma|Theorem|Corollary|Proposition|Example)[[:space:]]/ {
       if (name != "") flush("open?");
