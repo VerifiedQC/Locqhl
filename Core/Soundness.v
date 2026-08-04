@@ -159,7 +159,30 @@ Section Soundness.
       ForallOrdPairs (exclusive Σ) (map snd fam) ->
       Σ ⊨ {{ mk_assertion phi (qsum (map fst fam)) }} P
           {{ mk_assertion (fdisj (map snd fam)) B }}.
-  Admitted.
+  Proof.
+    intros phi B P fam Hfam Hex
+           s r HWFr Hherm Hpsd Hh Hdef E HTerm.
+    unfold defined_in, mk_assertion in Hdef;
+      cbn [quantum_part] in Hdef; destruct Hdef as (M & HM).
+    pose proof (qsum_denote_parts Σ s (map fst fam) M HM) as HAs.
+    (* the sum of pre-effects splits the precondition's degree,
+       the mutually exclusive guards split the postcondition's *)
+    rewrite (degree_qsum Σ phi (map fst fam) s r M HM).
+    rewrite (total_degree_fdisj_exclusive Σ (map snd fam) B E Hex).
+    apply fold_right_Rplus_le; [lra |].
+    (* the family, one member at a time; drop everything fam-dependent so
+       the induction hypothesis stays a plain implication *)
+    assert (Hphi : formula_holds Σ s phi = true)
+      by (unfold mk_assertion in Hh; cbn [classical_part] in Hh; exact Hh).
+    clear Hh Hex HM.
+    revert Hfam HAs; induction fam as [| Api fam IH];
+      intros Hfam HAs; cbn [map] in HAs |- *.
+    - constructor.
+    - constructor.
+      + apply (Forall_inv Hfam s r HWFr Hherm Hpsd Hphi
+                 (Forall_inv HAs) E HTerm).
+      + apply IH; [apply (Forall_inv_tail Hfam) | apply (Forall_inv_tail HAs)].
+  Qed.
 
   (** ** Induction principle for [derivable] with the Branch-Accum family IH.
          The generated principle offers no IH for that rule's premise: the
