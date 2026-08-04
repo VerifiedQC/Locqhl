@@ -112,7 +112,15 @@ Section Soundness.
   Lemma comm_done_sound : forall (Q : assertion dim) (k : krow),
       row_all (fun K => K = ε) k ->
       Σ ⊨ {{ Q }} krow_prog k {{ Q }}.
-  Admitted.
+  Proof.
+    (* an all-ε K-row embeds as a row of terminated processes, so this is
+       exactly [done_sound] *)
+    intros Q k Hk. apply done_sound.
+    unfold prog_terminated, krow_prog.
+    induction k as [K | k1 IH1 k2 IH2]; cbn [row_map row_all] in *.
+    - rewrite Hk. reflexivity.
+    - destruct Hk as [H1 H2]. split; [apply IH1; exact H1 | apply IH2; exact H2].
+  Qed.
 
   (** The whole ⊢ₖ judgment, by induction on its derivation. *)
   Lemma comm_derivable_sound :
