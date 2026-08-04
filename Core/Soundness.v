@@ -149,13 +149,47 @@ Section Soundness.
 
   (** ** 5. Aux-Subst — a variable the program neither reads nor writes may
          be replaced by any value throughout the triple. *)
+  Lemma program_read_cvar : forall P, incl (program_read P) (program_cvar P).
+  Proof.
+    unfold program_read, program_cvar.
+    induction P as [T | P1 IH1 P2 IH2]; simpl.
+    - unfold process_cvar. apply incl_appr, incl_refl.
+    - apply incl_app; [ apply incl_appl, IH1 | apply incl_appr, IH2 ].
+  Qed.
+
   Lemma aux_subst_sound :
     forall (Q R : assertion dim) (P : program) (y : var) (v : val),
       ~ In y (program_cvar P) ->
       Σ ⊨ {{ Q }} P {{ R }} ->
       Σ ⊨ {{ assertion_subst Q y (e_val v) }} P
           {{ assertion_subst R y (e_val v) }}.
-  Admitted.
+  Proof.
+    intros Q R P y v Hy Hval s r HWFr Hherm Hpsd Hh Hdef E HTerm.
+    assert (Hc : ~ In y (program_change P))
+      by (intro Hin; apply Hy, program_change_cvar, Hin).
+    assert (Hr2 : ~ In y (program_read P))
+      by (intro Hin; apply Hy, program_read_cvar, Hin).
+    (* transport the pre- and postcondition through the substitution;
+       the substituted value is a literal, so the store update is uniform *)
+    rewrite degree_subst. cbn [eval_expr].
+    rewrite total_degree_subst_map.
+    replace (map (fun '(s0, r0) =>
+                    (s0 [ y |-> eval_expr (i_fn Σ) s0 (e_val v) ], r0)) E)
+      with (upd_ens y v E)
+      by (unfold upd_ens; apply map_ext; intros [s0 r0]; reflexivity).
+    apply (Hval (s [ y |-> v ]) r HWFr Hherm Hpsd).
+    - replace (classical_part (assertion_subst Q y (e_val v)))
+        with (formula_subst (classical_part Q) y (e_val v)) in Hh
+        by reflexivity.
+      rewrite formula_holds_subst in Hh. exact Hh.
+    - destruct Hdef as (M & HM).
+      replace (quantum_part (assertion_subst Q y (e_val v)))
+        with (qpred_subst (quantum_part Q) y (e_val v)) in HM
+        by reflexivity.
+      rewrite qpred_denote_subst in HM.
+      exists M. exact HM.
+    - apply Term_upd; assumption.
+  Qed.
 
   (** ** 6. Branch-Accum — finite additivity over the family. *)
   Lemma branch_accum_sound :
