@@ -2,6 +2,7 @@ From Stdlib Require Import Lists.List.
 From Stdlib Require Import Arith.PeanoNat.
 From QuantumLib Require Import Matrix Quantum Pad.
 From Locqhl.Core Require Import Syntax Names QuantumActions Semantics Assertions WellFormed Rules SoundnessFacts Soundness.
+From Locqhl.CaseStudies Require BellComplete.
 Import ListNotations.
 Open Scope proc_scope.
 
@@ -431,7 +432,11 @@ Section Spec.
       .+ (UA† × (∣0⟩⟨0∣ ⊗ ∣1⟩⟨1∣ ⊗ Corr 0 1) × UA
       .+ (UA† × (∣1⟩⟨1∣ ⊗ ∣0⟩⟨0∣ ⊗ Corr 1 0) × UA
       .+ UA† × (∣1⟩⟨1∣ ⊗ ∣1⟩⟨1∣ ⊗ Corr 1 1) × UA)).
-  Admitted.
+  Proof.
+    (* proved, from first principles, in CaseStudies/BellComplete.v; the
+       definitions there are verbatim copies, so this is pure conversion *)
+    exact (BellComplete.bell_completeness psi WF_psi norm_psi).
+  Qed.
 
   Definition y1 : var := 4%nat.
   Definition y2 : var := 5%nat.
