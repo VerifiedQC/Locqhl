@@ -23,9 +23,16 @@
 
 From Stdlib Require Import Arith.PeanoNat.
 From QuantumLib Require Import Matrix Quantum Pad VecSet CauchySchwarz.
-From Locqhl.Core Require Import Assertions.
 
 Local Open Scope matrix_scope.
+
+(* The Löwner order, written exactly as in Locqhl.Core.Assertions, so that
+   this file depends on QuantumLib ONLY.  Same body, so the two notions are
+   definitionally equal and Teleportation.v's Fact closes by conversion. *)
+Definition lowner {n} (M N : Square n) : Prop :=
+  positive_semidefinite (N .+ (- C1) .* M)%M.
+
+Notation "M ⊑ N" := (lowner M N) (at level 70).
 
 (* ---- Generic: a unit vector in a projector's range ------------------ *)
 
