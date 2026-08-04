@@ -1033,5 +1033,576 @@ Section SoundnessFacts.
     intros l1 l2 b1 b2 Hb H; induction H; cbn [fold_right]; [exact Hb | lra].
   Qed.
 
+  (* ================================================================ *)
+  (* Aux-Subst groundwork: updating a variable the program neither    *)
+  (* reads nor writes commutes with every operational step.           *)
+  (* ================================================================ *)
+
+  Lemma store_update_comm : forall (s : store) x y a v,
+      x <> y ->
+      (s [ x |-> a ]) [ y |-> v ] = (s [ y |-> v ]) [ x |-> a ].
+  Proof.
+    intros s x y a v Hxy.
+    apply functional_extensionality; intro z.
+    unfold store_update.
+    destruct (Nat.eqb y z) eqn:Ey; destruct (Nat.eqb x z) eqn:Ex;
+      try reflexivity.
+    apply Nat.eqb_eq in Ey. apply Nat.eqb_eq in Ex. congruence.
+  Qed.
+
+  Fixpoint eval_expr_update_notin (fn : funsym -> list val -> val)
+      (s : store) (y : var) (v : val) (e : expr) {struct e} :
+      ~ In y (expr_vars e) ->
+      eval_expr fn (s [ y |-> v ]) e = eval_expr fn s e.
+  Proof.
+    destruct e as [w | x | f es]; simpl; intro Hy.
+    - reflexivity.
+    - unfold store_update. destruct (Nat.eqb y x) eqn:Ey.
+      + apply Nat.eqb_eq in Ey; subst; exfalso; apply Hy; left; reflexivity.
+      + reflexivity.
+    - f_equal. induction es as [| e0 es' IHes]; simpl; [reflexivity |].
+      simpl in Hy. f_equal.
+      + apply eval_expr_update_notin.
+        intro Hin; apply Hy, in_or_app; left; exact Hin.
+      + apply IHes.
+        intro Hin; apply Hy, in_or_app; right; exact Hin.
+  Qed.
+
+  Lemma eval_bool_update_notin :
+    forall (fn : funsym -> list val -> val) (rl : relsym -> list val -> bool)
+           (s : store) (y : var) (v : val) (b : bexpr),
+      ~ In y (bexpr_vars b) ->
+      eval_bool fn rl (s [ y |-> v ]) b = eval_bool fn rl s b.
+  Proof.
+    intros fn rl s y v b; induction b; simpl; intro Hy;
+      try reflexivity.
+    - f_equal. apply map_ext_in. intros e0 He0.
+      apply eval_expr_update_notin.
+      intro Hin. apply Hy. apply in_flat_map. eauto.
+    - now rewrite IHb.
+    - rewrite IHb1, IHb2; [reflexivity | |];
+        intro Hin; apply Hy, in_or_app; auto.
+    - rewrite IHb1, IHb2; [reflexivity | |];
+        intro Hin; apply Hy, in_or_app; auto.
+  Qed.
+
+  Definition upd_st (y : var) (v : val) (st : cqstate dim) : cqstate dim :=
+    ((fst st) [ y |-> v ], snd st).
+
+  Definition upd_ens (y : var) (v : val) (E : ensemble dim) : ensemble dim :=
+    map (upd_st y v) E.
+
+  Lemma upd_ens_app : forall y v (E1 E2 : ensemble dim),
+      upd_ens y v (E1 ++ E2) = upd_ens y v E1 ++ upd_ens y v E2.
+  Proof. intros; unfold upd_ens; apply map_app. Qed.
+
+  Lemma upd_ens_assign_comm : forall y v x e (E : ensemble dim),
+      x <> y -> ~ In y (expr_vars e) ->
+      upd_ens y v
+        (map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E)
+      = map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r))
+            (upd_ens y v E).
+  Proof.
+    intros y v x e E Hxy Hye. unfold upd_ens.
+    rewrite !map_map. apply map_ext. intros [s r].
+    unfold upd_st; cbn [fst snd].
+    rewrite (eval_expr_update_notin _ _ _ _ e Hye).
+    f_equal. apply store_update_comm. exact Hxy.
+  Qed.
+
+  Lemma upd_ens_qmap_comm : forall y v (g : qstate dim -> qstate dim)
+                                   (E : ensemble dim),
+      upd_ens y v (map (fun '(s,r) => (s, g r)) E)
+      = map (fun '(s,r) => (s, g r)) (upd_ens y v E).
+  Proof.
+    intros. unfold upd_ens. rewrite !map_map. apply map_ext.
+    intros [s r]. reflexivity.
+  Qed.
+
+  Lemma ensemble_filter_upd : forall y v (p : store -> bool)
+                                     (E : ensemble dim),
+      (forall s, p (s [ y |-> v ]) = p s) ->
+      ensemble_filter p (upd_ens y v E)
+      = upd_ens y v (ensemble_filter p E).
+  Proof.
+    intros y v p E Hp. unfold upd_ens, ensemble_filter.
+    induction E as [| [s r] E IH]; cbn [map filter fst upd_st]; [reflexivity |].
+    cbn [fst]. rewrite Hp. destruct (p s); cbn [map]; rewrite IH; reflexivity.
+  Qed.
+
+  Lemma local_step_upd :
+    forall y v (L : lblock) (E : ensemble dim) (G : local_config dim),
+      ~ In y (lblock_change L) ->
+      ~ In y (lblock_read L) ->
+      Σ ⊳ ‹ L, E › →ₗ G ->
+      Σ ⊳ ‹ L, upd_ens y v E › →ₗ
+        map (fun c => (fst c, upd_ens y v (snd c))) G.
+  Proof.
+    intros y v L E G Hc Hr Hstep; induction Hstep; cbn [map fst snd].
+    - apply local_step_skip.
+    - (* assign *)
+      rewrite upd_ens_assign_comm;
+        [ apply local_step_assign
+        | intro He; apply Hc; cbn [lblock_change]; left; exact He
+        | intro He; apply Hr; cbn [lblock_read]; exact He ].
+    - (* init *)
+      rewrite upd_ens_qmap_comm. apply local_step_init.
+    - (* ugate *)
+      rewrite upd_ens_qmap_comm. apply local_step_ugate.
+    - (* meas *)
+      assert (Hxy : x <> y).
+      { intro; subst. apply Hc. cbn [lblock_change]. left. reflexivity. }
+      replace (upd_ens y v
+                 (flat_map (fun '(s,r) =>
+                    map (fun m => (s [ x |-> m ],
+                                   apply_meas (i_mm Σ M qs) m r))
+                        (fst (i_mm Σ M qs))) E))
+        with (flat_map (fun '(s,r) =>
+                map (fun m => (s [ x |-> m ],
+                               apply_meas (i_mm Σ M qs) m r))
+                    (fst (i_mm Σ M qs))) (upd_ens y v E)).
+      + apply local_step_meas.
+      + unfold upd_ens. rewrite !flat_map_concat_map, !map_map.
+        rewrite concat_map, map_map. f_equal. apply map_ext. intros [s r].
+        unfold upd_st; cbn [fst snd].
+        rewrite !map_map. apply map_ext. intro m.
+        f_equal. symmetry. apply store_update_comm. exact Hxy.
+    - (* seq *)
+      assert (Hc1 : ~ In y (lblock_change L1)).
+      { intro Hin; apply Hc; cbn [lblock_change]; apply in_or_app; auto. }
+      assert (Hr1 : ~ In y (lblock_read L1)).
+      { intro Hin; apply Hr; cbn [lblock_read]; apply in_or_app; auto. }
+      specialize (IHHstep Hc1 Hr1).
+      rewrite !map_map.
+      match goal with
+      | |- Σ ⊳ ‹ _, _ › →ₗ ?RHS =>
+          replace RHS
+            with (map (fun c => match fst c with
+                                | r_done => (r_more L2, snd c)
+                                | r_more L1' => (r_more <{ L1' ; L2 }>, snd c)
+                                end)
+                      (map (fun c => (fst c, upd_ens y v (snd c))) G))
+      end.
+      + apply local_step_seq. exact IHHstep.
+      + rewrite map_map. apply map_ext. intros [rd Ee].
+        cbn [fst snd]. destruct rd; reflexivity.
+    - (* if *)
+      cbn [map app fst snd].
+      rewrite <- (ensemble_filter_upd y v
+                    (fun s => eval_bool (i_fn Σ) (i_rl Σ) s b) E)
+        by (intro s; apply eval_bool_update_notin;
+            intro Hin; apply Hr; cbn [lblock_read];
+            apply in_or_app; left; exact Hin).
+      rewrite <- (ensemble_filter_upd y v
+                    (fun s => negb (eval_bool (i_fn Σ) (i_rl Σ) s b)) E)
+        by (intro s;
+            rewrite (eval_bool_update_notin _ _ _ _ _ b);
+            [ reflexivity
+            | intro Hin; apply Hr; cbn [lblock_read];
+              apply in_or_app; left; exact Hin ]).
+      apply local_step_if.
+  Qed.
+
+  (* ---- Lifting the update through distributed steps --------------- *)
+
+  Definition upd_cfg (y : var) (v : val) (G : distri_config dim)
+    : distri_config dim :=
+    map (fun c => (fst c, upd_ens y v (snd c))) G.
+
+  Lemma picks_in : forall (K K' : cblock) (a : caction),
+      K ∋ a □ K' -> In a K.
+  Proof.
+    intros K K' a Hp; induction Hp; [left; reflexivity | right; assumption].
+  Qed.
+
+  Lemma replace_leaf_flat_incl :
+    forall {A B} (f : A -> list B) (a b : A) (r r' : row A),
+      replace_leaf a b r r' -> incl (f a) (row_flat f r).
+  Proof.
+    intros A B f a b r r' Hrl; induction Hrl; cbn [row_flat].
+    - apply incl_refl.
+    - intros z Hz; apply in_or_app; left; apply IHHrl, Hz.
+    - intros z Hz; apply in_or_app; right; apply IHHrl, Hz.
+  Qed.
+
+  Lemma distri_step_upd :
+    forall y v (P : program) (E : ensemble dim) (G : distri_config dim),
+      ~ In y (program_change P) ->
+      ~ In y (program_read P) ->
+      Σ ⊳ ‹ P, E › ⇝ G ->
+      Σ ⊳ ‹ P, upd_ens y v E › ⇝ upd_cfg y v G.
+  Proof.
+    intros y v P E G Hc Hr Hstep; induction Hstep.
+    - (* ds_local *)
+      assert (HcL : ~ In y (lblock_change L)).
+      { intro Hin; apply Hc.
+        cbn [program_cvar program_change row_flat process_change
+             residual_change].
+        apply in_or_app; left; exact Hin. }
+      assert (HrL : ~ In y (lblock_read L)).
+      { intro Hin; apply Hr.
+        cbn [program_read row_flat process_read residual_read].
+        apply in_or_app; left; exact Hin. }
+      unfold upd_cfg. rewrite map_map. cbn [fst snd].
+      replace (map (fun c => (⟨ advance (fst c) K T ⟩, upd_ens y v (snd c))) Gl)
+        with (map (fun c => (⟨ advance (fst c) K T ⟩, snd c))
+                  (map (fun c => (fst c, upd_ens y v (snd c))) Gl))
+        by (rewrite map_map; apply map_ext; intros [rd Ee]; reflexivity).
+      apply ds_local. apply local_step_upd; assumption.
+    - (* ds_par_l *)
+      assert (Hc1 : ~ In y (program_change P1)).
+      { intro Hin; apply Hc; cbn [program_change row_flat];
+          apply in_or_app; auto. }
+      assert (Hr1 : ~ In y (program_read P1)).
+      { intro Hin; apply Hr; cbn [program_read row_flat];
+          apply in_or_app; auto. }
+      specialize (IHHstep Hc1 Hr1).
+      unfold upd_cfg in *. rewrite map_map. cbn [fst snd].
+      replace (map (fun c => (fst c ∥ P2, upd_ens y v (snd c))) G1)
+        with (map (fun c => (fst c ∥ P2, snd c))
+                  (map (fun c => (fst c, upd_ens y v (snd c))) G1))
+        by (rewrite map_map; apply map_ext; intros [Pp Ee]; reflexivity).
+      apply ds_par_l. exact IHHstep.
+    - (* ds_par_r *)
+      assert (Hc2 : ~ In y (program_change P2)).
+      { intro Hin; apply Hc; cbn [program_change row_flat];
+          apply in_or_app; auto. }
+      assert (Hr2 : ~ In y (program_read P2)).
+      { intro Hin; apply Hr; cbn [program_read row_flat];
+          apply in_or_app; auto. }
+      specialize (IHHstep Hc2 Hr2).
+      unfold upd_cfg in *. rewrite map_map. cbn [fst snd].
+      replace (map (fun c => (P1 ∥ fst c, upd_ens y v (snd c))) G2)
+        with (map (fun c => (P1 ∥ fst c, snd c))
+                  (map (fun c => (fst c, upd_ens y v (snd c))) G2))
+        by (rewrite map_map; apply map_ext; intros [Pp Ee]; reflexivity).
+      apply ds_par_r. exact IHHstep.
+    - (* ds_comm_lr : sender in P1, receiver in P2 *)
+      assert (Hxy : x <> y).
+      { intro; subst. apply Hc.
+        cbn [program_change row_flat]. apply in_or_app; right.
+        eapply (replace_leaf_flat_incl process_change); [eassumption |].
+        cbn [process_change residual_change cblock_change app].
+        apply in_or_app; left.
+        apply <- in_flat_map. exists (c_recv c y). split.
+        - eapply picks_in; eassumption.
+        - cbn [caction_change]. left. reflexivity. }
+      assert (Hye : ~ In y (expr_vars e)).
+      { intro Hin. apply Hr.
+        cbn [program_read row_flat]. apply in_or_app; left.
+        eapply (replace_leaf_flat_incl process_read); [eassumption |].
+        cbn [process_read residual_read cblock_read app].
+        apply in_or_app; left.
+        apply <- in_flat_map. exists (c_send c e). split.
+        - eapply picks_in; eassumption.
+        - cbn [caction_read]. exact Hin. }
+      unfold upd_cfg. cbn [map fst snd].
+      rewrite upd_ens_assign_comm by assumption.
+      eapply ds_comm_lr; eassumption.
+    - (* ds_comm_rl : sender in P2, receiver in P1 *)
+      assert (Hxy : x <> y).
+      { intro; subst. apply Hc.
+        cbn [program_change row_flat]. apply in_or_app; left.
+        eapply (replace_leaf_flat_incl process_change); [eassumption |].
+        cbn [process_change residual_change cblock_change app].
+        apply in_or_app; left.
+        apply <- in_flat_map. exists (c_recv c y). split.
+        - eapply picks_in; eassumption.
+        - cbn [caction_change]. left. reflexivity. }
+      assert (Hye : ~ In y (expr_vars e)).
+      { intro Hin. apply Hr.
+        cbn [program_read row_flat]. apply in_or_app; right.
+        eapply (replace_leaf_flat_incl process_read); [eassumption |].
+        cbn [process_read residual_read cblock_read app].
+        apply in_or_app; left.
+        apply <- in_flat_map. exists (c_send c e). split.
+        - eapply picks_in; eassumption.
+        - cbn [caction_read]. exact Hin. }
+      unfold upd_cfg. cbn [map fst snd].
+      rewrite upd_ens_assign_comm by assumption.
+      eapply ds_comm_rl; eassumption.
+  Qed.
+
+  (* ---- Footprints only shrink along steps -------------------------- *)
+
+  Lemma picks_incl : forall (K K' : cblock) (a : caction),
+      K ∋ a □ K' -> incl K' K.
+  Proof.
+    intros K K' a Hp; induction Hp.
+    - intros z Hz; right; exact Hz.
+    - intros z [Hz | Hz]; [left; exact Hz | right; apply IHHp, Hz].
+  Qed.
+
+  Lemma replace_leaf_flat_incl_rev :
+    forall {A B} (f : A -> list B) (a b : A) (r r' : row A),
+      replace_leaf a b r r' -> incl (f b) (f a) ->
+      incl (row_flat f r') (row_flat f r).
+  Proof.
+    intros A B f a b r r' Hrl Hba; induction Hrl; cbn [row_flat].
+    - exact Hba.
+    - intros z Hz; apply in_app_or in Hz; apply in_or_app;
+        destruct Hz; [left; apply IHHrl |]; auto.
+    - intros z Hz; apply in_app_or in Hz; apply in_or_app;
+        destruct Hz; [| right; apply IHHrl]; auto.
+  Qed.
+
+  Lemma advance_change_incl : forall R K T,
+      incl (process_change (advance R K T))
+           (residual_change R ++ cblock_change K ++ process_change T).
+  Proof.
+    intros R K T; destruct R; destruct K; apply incl_refl.
+  Qed.
+
+  Lemma advance_read_incl : forall R K T,
+      incl (process_read (advance R K T))
+           (residual_read R ++ cblock_read K ++ process_read T).
+  Proof.
+    intros R K T; destruct R; destruct K; apply incl_refl.
+  Qed.
+
+  Lemma flat_map_incl : forall {A B} (f : A -> list B) (l l' : list A),
+      incl l' l -> incl (flat_map f l') (flat_map f l).
+  Proof.
+    intros A B f l l' Hl z Hz.
+    apply in_flat_map in Hz as (a & Ha & Hz).
+    apply in_flat_map. exists a. split; [apply Hl, Ha | exact Hz].
+  Qed.
+
+  Lemma advance_comm_change_incl : forall Ks Ks' (a : caction) Ts,
+      Ks ∋ a □ Ks' ->
+      incl (process_change (advance ↓ Ks' Ts)) (process_change (phase ↓ Ks Ts)).
+  Proof.
+    intros Ks Ks' a Ts Hp z Hz.
+    apply (advance_change_incl ↓ Ks' Ts) in Hz.
+    cbn [process_change residual_change app] in *.
+    apply in_app_or in Hz; apply in_or_app; destruct Hz as [Hz | Hz].
+    - left. eapply flat_map_incl; [eapply picks_incl; eassumption | exact Hz].
+    - right; exact Hz.
+  Qed.
+
+  Lemma advance_comm_read_incl : forall Ks Ks' (a : caction) Ts,
+      Ks ∋ a □ Ks' ->
+      incl (process_read (advance ↓ Ks' Ts)) (process_read (phase ↓ Ks Ts)).
+  Proof.
+    intros Ks Ks' a Ts Hp z Hz.
+    apply (advance_read_incl ↓ Ks' Ts) in Hz.
+    cbn [process_read residual_read app] in *.
+    apply in_app_or in Hz; apply in_or_app; destruct Hz as [Hz | Hz].
+    - left. eapply flat_map_incl; [eapply picks_incl; eassumption | exact Hz].
+    - right; exact Hz.
+  Qed.
+
+  Lemma local_step_residual_incl :
+    forall (L : lblock) (E : ensemble dim) (G : local_config dim),
+      Σ ⊳ ‹ L, E › →ₗ G ->
+      Forall (fun c => incl (residual_change (fst c)) (lblock_change L)
+                       /\ incl (residual_read (fst c)) (lblock_read L)) G.
+  Proof.
+    intros L E G Hstep; induction Hstep;
+      cbn [residual_change residual_read lblock_change lblock_read].
+    - constructor; [split; apply incl_nil_l | constructor].
+    - constructor; [split; apply incl_nil_l | constructor].
+    - constructor; [split; apply incl_nil_l | constructor].
+    - constructor; [split; apply incl_nil_l | constructor].
+    - constructor; [split; apply incl_nil_l | constructor].
+    - (* seq *)
+      rewrite Forall_map. eapply Forall_impl; [| exact IHHstep].
+      intros [rd Ee] [Hch Hrd]; cbn [fst] in *.
+      destruct rd; cbn [residual_change residual_read
+                        lblock_change lblock_read] in *; split;
+        intros z Hz.
+      + apply in_or_app; right; exact Hz.
+      + apply in_or_app; right; exact Hz.
+      + apply in_app_or in Hz; apply in_or_app;
+          destruct Hz; [left; apply Hch | right]; auto.
+      + apply in_app_or in Hz; apply in_or_app;
+          destruct Hz; [left; apply Hrd | right]; auto.
+    - (* if *)
+      constructor; [| constructor; [| constructor]];
+        cbn [fst residual_change residual_read]; split; intros z Hz.
+      + apply in_or_app; left; exact Hz.
+      + apply in_or_app; right; apply in_or_app; left; exact Hz.
+      + apply in_or_app; right; exact Hz.
+      + apply in_or_app; right; apply in_or_app; right; exact Hz.
+  Qed.
+
+  Lemma distri_step_footprint :
+    forall (P : program) (E : ensemble dim) (G : distri_config dim),
+      Σ ⊳ ‹ P, E › ⇝ G ->
+      Forall (fun c => incl (program_change (fst c)) (program_change P)
+                       /\ incl (program_read (fst c)) (program_read P)) G.
+  Proof.
+    intros P E G Hstep; induction Hstep.
+    - (* ds_local *)
+      pose proof (local_step_residual_incl _ _ _ H) as HG.
+      rewrite Forall_map. eapply Forall_impl; [| exact HG].
+      intros [rd Ee] [Hch Hrd]; cbn [fst] in *.
+      cbn [program_change program_read row_flat].
+      split; intros z Hz.
+      + apply (advance_change_incl rd K T) in Hz.
+        cbn [process_change].
+        apply in_app_or in Hz; apply in_or_app;
+          destruct Hz as [Hz | Hz]; [left; apply Hch; exact Hz | right; exact Hz].
+      + apply (advance_read_incl rd K T) in Hz.
+        cbn [process_read].
+        apply in_app_or in Hz; apply in_or_app;
+          destruct Hz as [Hz | Hz]; [left; apply Hrd; exact Hz | right; exact Hz].
+    - (* ds_par_l *)
+      rewrite Forall_map. eapply Forall_impl; [| exact IHHstep].
+      intros [Pp Ee] [Hch Hrd]; cbn [fst] in *.
+      cbn [program_change program_read row_flat]; split; intros z Hz;
+        apply in_app_or in Hz; apply in_or_app;
+        destruct Hz; [left; apply Hch | right | left; apply Hrd | right]; auto.
+    - (* ds_par_r *)
+      rewrite Forall_map. eapply Forall_impl; [| exact IHHstep].
+      intros [Pp Ee] [Hch Hrd]; cbn [fst] in *.
+      cbn [program_change program_read row_flat]; split; intros z Hz;
+        apply in_app_or in Hz; apply in_or_app;
+        destruct Hz; [left | right; apply Hch | left | right; apply Hrd]; auto.
+    - (* ds_comm_lr *)
+      constructor; [| constructor]. cbn [fst].
+      cbn [program_change program_read row_flat]; split; intros z Hz;
+        apply in_app_or in Hz; apply in_or_app; destruct Hz as [Hz | Hz].
+      + left.
+        eapply (replace_leaf_flat_incl_rev process_change);
+          [eassumption | eapply advance_comm_change_incl; eassumption
+          | exact Hz].
+      + right.
+        eapply (replace_leaf_flat_incl_rev process_change);
+          [eassumption | eapply advance_comm_change_incl; eassumption
+          | exact Hz].
+      + left.
+        eapply (replace_leaf_flat_incl_rev process_read);
+          [eassumption | eapply advance_comm_read_incl; eassumption
+          | exact Hz].
+      + right.
+        eapply (replace_leaf_flat_incl_rev process_read);
+          [eassumption | eapply advance_comm_read_incl; eassumption
+          | exact Hz].
+    - (* ds_comm_rl *)
+      constructor; [| constructor]. cbn [fst].
+      cbn [program_change program_read row_flat]; split; intros z Hz;
+        apply in_app_or in Hz; apply in_or_app; destruct Hz as [Hz | Hz].
+      + left.
+        eapply (replace_leaf_flat_incl_rev process_change);
+          [eassumption | eapply advance_comm_change_incl; eassumption
+          | exact Hz].
+      + right.
+        eapply (replace_leaf_flat_incl_rev process_change);
+          [eassumption | eapply advance_comm_change_incl; eassumption
+          | exact Hz].
+      + left.
+        eapply (replace_leaf_flat_incl_rev process_read);
+          [eassumption | eapply advance_comm_read_incl; eassumption
+          | exact Hz].
+      + right.
+        eapply (replace_leaf_flat_incl_rev process_read);
+          [eassumption | eapply advance_comm_read_incl; eassumption
+          | exact Hz].
+  Qed.
+
+  (* ---- The update lifts through whole executions ------------------- *)
+
+  Definition cfg_avoid (y : var) (G : distri_config dim) : Prop :=
+    Forall (fun c => ~ In y (program_change (fst c))
+                     /\ ~ In y (program_read (fst c))) G.
+
+  Lemma Forall_perm : forall {A} (P : A -> Prop) (l l' : list A),
+      Permutation l l' -> Forall P l -> Forall P l'.
+  Proof.
+    intros A P l l' Hp Hf. rewrite Forall_forall in *.
+    intros x Hx. apply Hf. eapply Permutation_in; [apply Permutation_sym|]; eassumption.
+  Qed.
+
+  Lemma norm_upd_cfg : forall y v (G : distri_config dim),
+      norm (upd_cfg y v G) = upd_cfg y v (norm G).
+  Proof.
+    intros y v G. unfold norm, upd_cfg.
+    induction G as [| [P E] G IH]; cbn [map filter fst snd]; [reflexivity |].
+    destruct E as [| st E']; cbn [upd_ens map]; rewrite IH; reflexivity.
+  Qed.
+
+  Lemma upd_cfg_app : forall y v (G1 G2 : distri_config dim),
+      upd_cfg y v (G1 ++ G2) = upd_cfg y v G1 ++ upd_cfg y v G2.
+  Proof. intros; unfold upd_cfg; apply map_app. Qed.
+
+  Lemma mixed_step_upd :
+    forall y v (G G' : distri_config dim),
+      cfg_avoid y G ->
+      mixed_step Σ G G' ->
+      mixed_step Σ (upd_cfg y v G) (upd_cfg y v G') /\ cfg_avoid y G'.
+  Proof.
+    intros y v G G' Hav Hstep; destruct Hstep as [G D E G0 G1 Hperm Hd].
+    assert (HavD : ~ In y (program_change D) /\ ~ In y (program_read D)).
+    { pose proof (Forall_perm _ _ _ Hperm Hav) as Hav'.
+      inversion Hav'; assumption. }
+    assert (HavG0 : cfg_avoid y G0).
+    { pose proof (Forall_perm _ _ _ Hperm Hav) as Hav'.
+      inversion Hav'; assumption. }
+    destruct HavD as [HcD HrD].
+    split.
+    - replace (upd_cfg y v (norm (G1 ⊎ G0)))
+        with (norm (upd_cfg y v G1 ⊎ upd_cfg y v G0))
+        by (rewrite <- upd_cfg_app, norm_upd_cfg; reflexivity).
+      apply (mixed_lift Σ (upd_cfg y v G) D (upd_ens y v E)
+                        (upd_cfg y v G0) (upd_cfg y v G1)).
+      + change ((D, upd_ens y v E) :: upd_cfg y v G0)
+          with (upd_cfg y v ((D, E) :: G0)).
+        apply Permutation_map. exact Hperm.
+      + apply distri_step_upd; assumption.
+    - apply Forall_filter_keep. apply Forall_app. split.
+      + pose proof (distri_step_footprint _ _ _ Hd) as HF.
+        eapply Forall_impl; [| exact HF].
+        intros [Pp Ee] [Hch Hrd]; cbn [fst] in *; split;
+          intro Hin; [apply HcD, Hch | apply HrD, Hrd]; exact Hin.
+      + exact HavG0.
+  Qed.
+
+  Lemma step_star_upd :
+    forall y v (G G' : distri_config dim),
+      cfg_avoid y G ->
+      step_star Σ G G' ->
+      step_star Σ (upd_cfg y v G) (upd_cfg y v G').
+  Proof.
+    intros y v G G' Hav Hstar; induction Hstar.
+    - apply star_refl.
+    - destruct (mixed_step_upd y v _ _ Hav H) as [Hs Hav2].
+      eapply star_step; [exact Hs | apply IHHstar, Hav2].
+  Qed.
+
+  Lemma collapse_upd_cfg : forall y v (G : distri_config dim),
+      collapse (upd_cfg y v G) = upd_ens y v (collapse G).
+  Proof.
+    intros y v G. unfold collapse, upd_cfg, upd_ens.
+    rewrite !flat_map_concat_map, !map_map.
+    rewrite concat_map, !map_map.
+    reflexivity.
+  Qed.
+
+  Lemma terminal_upd_cfg : forall y v (G : distri_config dim),
+      terminal G -> terminal (upd_cfg y v G).
+  Proof.
+    intros y v G Ht. unfold terminal, upd_cfg in *.
+    rewrite Forall_map. eapply Forall_impl; [| exact Ht].
+    intros [P E] HP; cbn [fst] in *; exact HP.
+  Qed.
+
+  Lemma Term_upd :
+    forall y v (P : program) (s : store) (r : qstate dim) (E : ensemble dim),
+      ~ In y (program_change P) ->
+      ~ In y (program_read P) ->
+      Term Σ P (s, r) E ->
+      Term Σ P (s [ y |-> v ], r) (upd_ens y v E).
+  Proof.
+    intros y v P s r E Hc Hr (G & Hstar & Hterm & Hcoll).
+    exists (upd_cfg y v G). split; [| split].
+    - change ({|| P, [(s [ y |-> v ], r)] ||})
+        with (upd_cfg y v ({|| P, [(s, r)] ||})).
+      apply step_star_upd; [| exact Hstar].
+      constructor; [split; assumption | constructor].
+    - apply terminal_upd_cfg, Hterm.
+    - rewrite collapse_upd_cfg, Hcoll. reflexivity.
+  Qed.
+
 
 End SoundnessFacts.
