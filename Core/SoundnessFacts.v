@@ -7,7 +7,8 @@
       an all-ε communication row is stuck          (comm_done chain)
       a local block's ensemble denotation          (denote, one_leaf_adequacy)
       degree bookkeeping over ensembles            (total_degree_* )
-      the three rows cut by zip3                   (zip3_* )
+      non-interfering blocks commute               (denote_comm, paper Lemma 1)
+      every interleaving of a row normalises       (prog_adequacy)
 ** **)
 
 From Stdlib Require Import Lists.List.
@@ -16,8 +17,8 @@ From Stdlib Require Import Reals.Reals Lra.
 From Stdlib Require Import Lia.
 From QuantumLib Require Import Matrix Quantum Pad.
 From Locqhl.Core Require Import
-  Syntax QuantumActions SemanticDomain Semantics Assertions WellFormed Rules
-  TraceFacts.
+  Syntax Names QuantumActions SemanticDomain Semantics Assertions WellFormed
+  Rules TraceFacts.
 Import ListNotations.
 
 Section SoundnessFacts.
@@ -53,9 +54,38 @@ Section SoundnessFacts.
   Definition config_ok {A} (G : list (A * ensemble dim)) : Prop :=
     Forall (fun c => ensemble_ok (snd c)) G.
 
+  (** The operators one quantum primitive may apply, tagged with the quantum
+      variables the primitive names:
+
+        U[q̄]        the unitary       i_uu Σ U q̄
+        x := M[q̄]   any member of the family  i_mm Σ M q̄
+        q := |0>    the two Kraus operators of [apply_init]
+
+      This is the only place a footprint [lblock_qvar] and an operator meet,
+      so it is what [local_ops] below quantifies over. **)
+  Inductive acts_on : Square (2 ^ dim) -> list qvar -> Prop :=
+  | acts_ugate : forall U qs,   acts_on (i_uu Σ U qs) qs
+  | acts_meas  : forall M qs m, acts_on (snd (i_mm Σ M qs) m) qs
+  | acts_init0 : forall q,      acts_on (pad_u dim q (∣0⟩⟨0∣)) (q :: nil)
+  | acts_init1 : forall q,      acts_on (pad_u dim q (∣0⟩⟨1∣)) (q :: nil).
+
+  (** Locality of the quantum structure.  The paper interprets U[q̄] by an
+      operator ON THE REGISTER q̄ (p.4), so two primitives naming disjoint
+      quantum variables act on disjoint registers and commute.  The [interp]
+      record only records the padded operator, which loses that information —
+      [lblock_qvar] disjointness alone says nothing about the matrices — so
+      the commutation is assumed here.  Without it Par-Disjoint-MP is FALSE:
+      U[q₀] ∥ V[q₁] would have two terminal collapses, UVρV†U† and VUρU†V†,
+      and the rule pins only the first. **)
+  Definition local_ops : Prop :=
+    forall K1 qs1 K2 qs2,
+      acts_on K1 qs1 -> acts_on K2 qs2 -> disjoint qs1 qs2 ->
+      (K1 × K2 = K2 × K1)%M.
+
   (** The paper's quantum structure interprets U/M symbols by operators on
       the register (p.4); the [interp] record does not enforce that they are
-      well-formed matrices, so preservation assumes it. **)
+      well-formed matrices, nor that they are local, so preservation and
+      Par-Disjoint-MP assume it. **)
   Definition wf_interp : Prop :=
     (forall U qs, WF_Matrix (i_uu Σ U qs)) /\
     (forall M qs m, WF_Matrix (snd (i_mm Σ M qs) m)) /\
@@ -64,7 +94,76 @@ Section SoundnessFacts.
        rendering — and T_M is a set *)
     (forall M qs m, ~ In m (fst (i_mm Σ M qs)) ->
                     snd (i_mm Σ M qs) m = Zero) /\
-    (forall M qs, NoDup (fst (i_mm Σ M qs))).
+    (forall M qs, NoDup (fst (i_mm Σ M qs))) /\
+    local_ops.
+
+  Lemma wf_interp_local : wf_interp -> local_ops.
+  Proof. intros H; exact (proj2 (proj2 (proj2 (proj2 H)))). Qed.
+
+  (** A sufficient condition for [local_ops], in the shape a case study
+      actually writes its structure down: every operator is QuantumLib's
+      padding of a one- or two-qubit gate AT the quantum variables the
+      primitive names (or Zero, or the identity — the junk a total [interp]
+      must return off-pattern).  Padded operators at disjoint positions
+      commute, so a case study only has to classify its own operators. **)
+  Inductive padded : Square (2 ^ dim) -> list qvar -> Prop :=
+  | padded_zero : forall qs, padded (@Zero (2 ^ dim) (2 ^ dim)) qs
+  | padded_id   : forall qs, padded (I (2 ^ dim)) qs
+  | padded_u    : forall a (A : Square 2),
+      WF_Matrix A -> padded (pad_u dim a A) (a :: nil)
+  | padded_ctrl : forall a b (A : Square 2),
+      WF_Matrix A -> padded (pad_ctrl dim a b A) (a :: b :: nil).
+
+  Lemma padded_WF : forall K qs, padded K qs -> WF_Matrix K.
+  Proof.
+    intros K qs H; destruct H as [qs | qs | a A HA | a b A HA];
+      try (apply (WF_pad_u dim); assumption);
+      try (apply (WF_pad_ctrl dim); assumption);
+      auto with wf_db.
+  Qed.
+
+  Lemma disjoint_neq : forall (x y : nat) (l m : list nat),
+      disjoint l m -> In x l -> In y m -> x <> y.
+  Proof. intros x y l m H Hx Hy Hxy; subst; exact (H _ Hx Hy). Qed.
+
+  Lemma disjoint_neq' : forall (x y : nat) (l m : list nat),
+      disjoint l m -> In x l -> In y m -> y <> x.
+  Proof. intros x y l m H Hx Hy Hxy; subst; exact (H _ Hx Hy). Qed.
+
+  Lemma padded_commute : forall K1 qs1 K2 qs2,
+      padded K1 qs1 -> padded K2 qs2 -> disjoint qs1 qs2 ->
+      (K1 × K2 = K2 × K1)%M.
+  Proof.
+    intros K1 qs1 K2 qs2 H1 H2 Hd.
+    assert (HW2 : WF_Matrix K2) by (eapply padded_WF; eassumption).
+    assert (HW1 : WF_Matrix K1) by (eapply padded_WF; eassumption).
+    destruct H1 as [q1 | q1 | a A HA | a b A HA].
+    1: now rewrite Mmult_0_l, Mmult_0_r.
+    1: now rewrite Mmult_1_l, Mmult_1_r.
+    - destruct H2 as [q2 | q2 | c C HC | c d C HC].
+      + now rewrite Mmult_0_l, Mmult_0_r.
+      + now rewrite Mmult_1_l, Mmult_1_r.
+      + apply pad_A_B_commutes;
+          [ eapply disjoint_neq; [exact Hd | simpl; auto | simpl; auto]
+          | assumption | assumption ].
+      + apply pad_A_ctrl_commutes;
+          [ eapply disjoint_neq; [exact Hd | simpl; auto | simpl; auto]
+          | eapply disjoint_neq; [exact Hd | simpl; auto | simpl; auto]
+          | assumption | assumption ].
+    - destruct H2 as [q2 | q2 | c C HC | c d C HC].
+      + now rewrite Mmult_0_l, Mmult_0_r.
+      + now rewrite Mmult_1_l, Mmult_1_r.
+      + symmetry; apply pad_A_ctrl_commutes;
+          [ eapply disjoint_neq'; [exact Hd | simpl; auto | simpl; auto]
+          | eapply disjoint_neq'; [exact Hd | simpl; auto | simpl; auto]
+          | assumption | assumption ].
+      + apply pad_ctrl_ctrl_commutes;
+          [ eapply disjoint_neq; [exact Hd | simpl; auto | simpl; auto]
+          | eapply disjoint_neq; [exact Hd | simpl; auto | simpl; auto]
+          | eapply disjoint_neq; [exact Hd | simpl; auto | simpl; auto]
+          | eapply disjoint_neq; [exact Hd | simpl; auto | simpl; auto]
+          | assumption | assumption ].
+  Qed.
 
   (** Plumbing: ensembles/configs stay legitimate under map / flat_map /
       filter when the action on each member does. **)
@@ -772,7 +871,7 @@ Section SoundnessFacts.
                (fst (i_mm Σ M qs))).
   Proof.
     intros interp_ok Q x y M qs s r Hyx.
-    destruct interp_ok as (HU & HM & Hzero & Hnodup).
+    destruct interp_ok as (HU & HM & Hzero & Hnodup & Hloc).
     destruct (in_dec Nat.eq_dec (s y) (fst (i_mm Σ M qs))) as [Hin | Hout].
     - destruct (in_split _ _ Hin) as (T1 & T2 & HT).
       pose proof (Hnodup M qs) as Hnd. rewrite HT in Hnd.
@@ -1602,6 +1701,939 @@ Section SoundnessFacts.
       constructor; [split; assumption | constructor].
     - apply terminal_upd_cfg, Hterm.
     - rewrite collapse_upd_cfg, Hcoll. reflexivity.
+  Qed.
+
+
+  (** ** 4. Interference freedom — the paper's Lemma 1. *****************
+
+      Par-Disjoint-MP reads the row D₁∥…∥D_N as the single block [lseq d],
+      but the semantics interleaves the leaves arbitrarily.  What closes the
+      gap is that two non-interfering blocks COMMUTE denotationally, so any
+      interleaving normalises to the displayed order.
+
+      The commutation is proved once, at the level of a generic ATOMIC
+      ACTION — a branch set J, a store map and a state map per branch.  All
+      five atomic local blocks have that shape, so the pairs collapse to two
+      independent obligations: the store maps commute (disjoint classical
+      footprints) and the state maps commute (disjoint quantum footprints,
+      plus [local_ops]).
+  *********************************************************************)
+
+  (* ---- list plumbing: reassociating a double flat_map --------------- *)
+
+  Lemma flat_map_flat_map :
+    forall {A B C} (f : B -> list C) (g : A -> list B) (l : list A),
+      flat_map f (flat_map g l) = flat_map (fun a => flat_map f (g a)) l.
+  Proof.
+    induction l as [| a l IH]; simpl; [reflexivity |].
+    rewrite flat_map_app, IH; reflexivity.
+  Qed.
+
+  Lemma flat_map_map :
+    forall {A B C} (f : B -> list C) (g : A -> B) (l : list A),
+      flat_map f (map g l) = flat_map (fun a => f (g a)) l.
+  Proof. induction l as [| a l IH]; simpl; [reflexivity | now rewrite IH]. Qed.
+
+  Lemma flat_map_ext' : forall {A B} (f g : A -> list B) (l : list A),
+      (forall a, f a = g a) -> flat_map f l = flat_map g l.
+  Proof.
+    intros A B f g l H; induction l as [| a l IH]; simpl;
+      [reflexivity | rewrite H, IH; reflexivity].
+  Qed.
+
+  Lemma flat_map_const_nil : forall {A B} (l : list A),
+      flat_map (fun _ : A => @nil B) l = nil.
+  Proof. induction l; simpl; [reflexivity | assumption]. Qed.
+
+  Lemma flat_map_cons_split :
+    forall {A B} (h : A -> B) (g : A -> list B) (l : list A),
+      Permutation (flat_map (fun a => h a :: g a) l) (map h l ++ flat_map g l).
+  Proof.
+    intros A B h g l; induction l as [| a l IH]; simpl; [apply Permutation_refl |].
+    apply perm_skip.
+    eapply Permutation_trans; [apply Permutation_app_head, IH |].
+    apply Permutation_app_swap_app.
+  Qed.
+
+  (** Transposing a product: running J₂ inside J₁ lists the same pairs as
+      running J₁ inside J₂ — in a different order, hence [Permutation]. **)
+  Lemma flat_map_map_swap :
+    forall {A B C} (f : A -> B -> C) (l1 : list A) (l2 : list B),
+      Permutation (flat_map (fun a => map (f a) l2) l1)
+                  (flat_map (fun b => map (fun a => f a b) l1) l2).
+  Proof.
+    intros A B C f l1; induction l1 as [| a l1 IH]; intros l2; simpl.
+    - rewrite (flat_map_const_nil l2). apply Permutation_refl.
+    - eapply Permutation_trans; [apply Permutation_app_head, IH |].
+      apply Permutation_sym,
+        (flat_map_cons_split (fun b => f a b)
+                             (fun b => map (fun a' => f a' b) l1) l2).
+  Qed.
+
+  Lemma Permutation_flat_map_ext :
+    forall {A} (f g : A -> ensemble dim) (l : list A),
+      (forall a, Permutation (f a) (g a)) ->
+      Permutation (flat_map f l) (flat_map g l).
+  Proof.
+    intros A f g l H; induction l as [| a l IH]; simpl;
+      [apply Permutation_refl | apply Permutation_app; [apply H | exact IH]].
+  Qed.
+
+  Lemma Permutation_flat_map_in :
+    forall {A} (f g : A -> ensemble dim) (l : list A),
+      (forall a, In a l -> Permutation (f a) (g a)) ->
+      Permutation (flat_map f l) (flat_map g l).
+  Proof.
+    intros A f g l; induction l as [| a l IH]; intros H; simpl;
+      [apply Permutation_refl |].
+    apply Permutation_app; [apply H; left; reflexivity |].
+    apply IH; intros b Hb; apply H; right; exact Hb.
+  Qed.
+
+  (* ---- the generic atomic action ------------------------------------ *)
+
+  Definition act (J : list nat) (sf : nat -> store -> store)
+                 (qf : nat -> qstate dim -> qstate dim) (E : ensemble dim)
+    : ensemble dim :=
+    flat_map (fun st => map (fun j => (sf j (fst st), qf j (snd st))) J) E.
+
+  Lemma act_comm : forall J1 sf1 qf1 J2 sf2 qf2,
+      (forall j1 j2 s, sf1 j1 (sf2 j2 s) = sf2 j2 (sf1 j1 s)) ->
+      (forall j1 j2 r, qf1 j1 (qf2 j2 r) = qf2 j2 (qf1 j1 r)) ->
+      forall E, Permutation (act J1 sf1 qf1 (act J2 sf2 qf2 E))
+                            (act J2 sf2 qf2 (act J1 sf1 qf1 E)).
+  Proof.
+    intros J1 sf1 qf1 J2 sf2 qf2 Hs Hq E.
+    unfold act; rewrite !flat_map_flat_map.
+    apply Permutation_flat_map_ext; intros [s r].
+    rewrite !flat_map_map; cbn [fst snd].
+    rewrite (flat_map_ext'
+               (fun j1 => map (fun j2 => (sf2 j2 (sf1 j1 s), qf2 j2 (qf1 j1 r))) J2)
+               (fun j1 => map (fun j2 => (sf1 j1 (sf2 j2 s), qf1 j1 (qf2 j2 r))) J2) J1)
+      by (intros j1; apply map_ext; intros j2; rewrite Hs, Hq; reflexivity).
+    apply Permutation_sym, flat_map_map_swap.
+  Qed.
+
+  (* ---- the five atomic blocks, read as [act] ------------------------ *)
+
+  Definition atomic (L : lblock) : Prop :=
+    match L with l_seq _ _ => False | l_if _ _ _ => False | _ => True end.
+
+  Definition abranch (L : lblock) : list nat :=
+    match L with l_meas _ M qs => fst (i_mm Σ M qs) | _ => 0%nat :: nil end.
+
+  Definition astore (L : lblock) : nat -> store -> store :=
+    match L with
+    | l_assign x e => fun _ s => s [ x |-> eval_expr (i_fn Σ) s e ]
+    | l_meas x _ _ => fun m s => s [ x |-> m ]
+    | _            => fun _ s => s
+    end.
+
+  Definition aqmap (L : lblock) : nat -> qstate dim -> qstate dim :=
+    match L with
+    | l_init q      => fun _ => apply_init q
+    | l_ugate U qs  => fun _ => apply_unitary (i_uu Σ U qs)
+    | l_meas _ M qs => fun m => apply_meas (i_mm Σ M qs) m
+    | _             => fun _ r => r
+    end.
+
+  Lemma denote_atomic : forall L, atomic L ->
+      forall E, denote L E = act (abranch L) (astore L) (aqmap L) E.
+  Proof.
+    intros L HL E; destruct L as [| x e | q | U qs | x M qs | L1 L2 | b L1 L0];
+      try contradiction; unfold act; cbn [abranch astore aqmap].
+    all: induction E as [| [s r] E IH]; simpl in *;
+      [reflexivity | rewrite <- IH; reflexivity].
+  Qed.
+
+  (* ---- obligation 1: the store maps commute ------------------------- *)
+
+  Lemma disjoint_sym : forall l1 l2, disjoint l1 l2 -> disjoint l2 l1.
+  Proof. intros l1 l2 H x Hx Hy; exact (H x Hy Hx). Qed.
+
+  Lemma disjoint_single : forall (x : nat) (l : list nat),
+      disjoint (x :: nil) l -> ~ In x l.
+  Proof. intros x l H; apply H; left; reflexivity. Qed.
+
+  Lemma disjoint_singles : forall x y : nat,
+      disjoint (x :: nil) (y :: nil) -> x <> y.
+  Proof.
+    intros x y H Hxy; subst.
+    apply (disjoint_single y (y :: nil) H); left; reflexivity.
+  Qed.
+
+  Lemma astore_comm : forall L1 L2,
+      atomic L1 -> atomic L2 ->
+      disjoint (lblock_change L1) (lblock_change L2) ->
+      disjoint (lblock_change L1) (lblock_read L2) ->
+      disjoint (lblock_change L2) (lblock_read L1) ->
+      forall j1 j2 s, astore L1 j1 (astore L2 j2 s) = astore L2 j2 (astore L1 j1 s).
+  Proof.
+    intros L1 L2 H1 H2 Hcc Hcr Hrc j1 j2 s;
+      destruct L1 as [| x1 e1 | q1 | U1 qs1 | x1 M1 qs1 | ? ? | ? ? ?];
+      destruct L2 as [| x2 e2 | q2 | U2 qs2 | x2 M2 qs2 | ? ? | ? ? ?];
+      try contradiction; cbn [astore lblock_change lblock_read] in *;
+      try reflexivity.
+    - (* x₁ := e₁  ‖  x₂ := e₂ *)
+      rewrite (eval_expr_update_notin _ _ _ _ e1 (disjoint_single x2 _ Hrc)).
+      rewrite (eval_expr_update_notin _ _ _ _ e2 (disjoint_single x1 _ Hcr)).
+      apply store_update_comm.
+      intro Hxy; apply (disjoint_single x1 _ Hcc); left; auto.
+    - (* x₁ := e₁  ‖  x₂ := M₂[q̄] *)
+      rewrite (eval_expr_update_notin _ _ _ _ e1 (disjoint_single x2 _ Hrc)).
+      apply store_update_comm.
+      intro Hxy; apply (disjoint_single x1 _ Hcc); left; auto.
+    - (* x₁ := M₁[q̄]  ‖  x₂ := e₂ *)
+      rewrite (eval_expr_update_notin _ _ _ _ e2 (disjoint_single x1 _ Hcr)).
+      apply store_update_comm.
+      intro Hxy; apply (disjoint_single x1 _ Hcc); left; auto.
+    - (* x₁ := M₁[q̄]  ‖  x₂ := M₂[q̄] *)
+      apply store_update_comm.
+      intro Hxy; apply (disjoint_single x1 _ Hcc); left; auto.
+  Qed.
+
+  (* ---- obligation 2: the state maps commute ------------------------- *)
+
+  Lemma super_super : forall (A B : Square (2 ^ dim)) (r : qstate dim),
+      super A (super B r) = super (A × B)%M r.
+  Proof.
+    intros A B r; unfold super.
+    rewrite Mmult_adjoint, !Mmult_assoc; reflexivity.
+  Qed.
+
+  Lemma super_comm : forall (A B : Square (2 ^ dim)) (r : qstate dim),
+      (A × B = B × A)%M -> super A (super B r) = super B (super A r).
+  Proof. intros A B r H; rewrite !super_super, H; reflexivity. Qed.
+
+  Lemma super_plus : forall (A : Square (2 ^ dim)) (X Y : qstate dim),
+      super A (X .+ Y)%M = (super A X .+ super A Y)%M.
+  Proof.
+    intros A X Y; unfold super.
+    rewrite Mmult_plus_distr_l, Mmult_plus_distr_r; reflexivity.
+  Qed.
+
+  Lemma apply_init_eq : forall q (r : qstate dim),
+      apply_init q r
+      = (super (pad_u dim q (∣0⟩⟨0∣)) r .+ super (pad_u dim q (∣0⟩⟨1∣)) r)%M.
+  Proof. reflexivity. Qed.
+
+  Lemma apply_init_plus : forall q (X Y : qstate dim),
+      @apply_init dim q (X .+ Y)%M = (apply_init q X .+ apply_init q Y)%M.
+  Proof. intros q X Y; rewrite !apply_init_eq, !super_plus; lma. Qed.
+
+  Lemma super_init_comm : local_ops ->
+    forall (A : Square (2 ^ dim)) (qs : list qvar) (q : qvar) (r : qstate dim),
+      acts_on A qs -> disjoint qs (q :: nil) ->
+      super A (apply_init q r) = apply_init q (super A r).
+  Proof.
+    intros Hloc A qs q r HA Hd.
+    rewrite !apply_init_eq, super_plus.
+    rewrite (super_comm _ _ _ (Hloc _ _ _ _ HA (acts_init0 q) Hd)).
+    rewrite (super_comm _ _ _ (Hloc _ _ _ _ HA (acts_init1 q) Hd)).
+    reflexivity.
+  Qed.
+
+  Lemma apply_init_comm : local_ops -> forall q1 q2 (r : qstate dim),
+      disjoint (q1 :: nil) (q2 :: nil) ->
+      apply_init q1 (apply_init q2 r) = apply_init q2 (apply_init q1 r).
+  Proof.
+    intros Hloc q1 q2 r Hd.
+    rewrite (apply_init_eq q1 (apply_init q2 r)).
+    rewrite (super_init_comm Hloc _ (q1 :: nil) q2 r (acts_init0 q1) Hd).
+    rewrite (super_init_comm Hloc _ (q1 :: nil) q2 r (acts_init1 q1) Hd).
+    rewrite <- apply_init_plus, <- apply_init_eq. reflexivity.
+  Qed.
+
+  Lemma aqmap_comm : local_ops -> forall L1 L2,
+      atomic L1 -> atomic L2 -> disjoint (lblock_qvar L1) (lblock_qvar L2) ->
+      forall j1 j2 r, aqmap L1 j1 (aqmap L2 j2 r) = aqmap L2 j2 (aqmap L1 j1 r).
+  Proof.
+    intros Hloc L1 L2 H1 H2 Hq j1 j2 r;
+      destruct L1 as [| x1 e1 | q1 | U1 qs1 | x1 M1 qs1 | ? ? | ? ? ?];
+      destruct L2 as [| x2 e2 | q2 | U2 qs2 | x2 M2 qs2 | ? ? | ? ? ?];
+      try contradiction; cbn [aqmap lblock_qvar] in *; try reflexivity;
+      unfold apply_unitary, apply_meas.
+    - (* q₁ := |0>  ‖  q₂ := |0> *) apply apply_init_comm; assumption.
+    - (* q₁ := |0>  ‖  U₂[q̄₂] *)
+      symmetry.
+      apply (super_init_comm Hloc _ qs2 q1 r (acts_ugate U2 qs2)
+               (disjoint_sym _ _ Hq)).
+    - (* q₁ := |0>  ‖  x₂ := M₂[q̄₂] *)
+      symmetry.
+      apply (super_init_comm Hloc _ qs2 q1 r (acts_meas M2 qs2 j2)
+               (disjoint_sym _ _ Hq)).
+    - (* U₁[q̄₁]  ‖  q₂ := |0> *)
+      apply (super_init_comm Hloc _ qs1 q2 r (acts_ugate U1 qs1) Hq).
+    - (* U₁[q̄₁]  ‖  U₂[q̄₂] *)
+      apply super_comm.
+      exact (Hloc _ _ _ _ (acts_ugate U1 qs1) (acts_ugate U2 qs2) Hq).
+    - (* U₁[q̄₁]  ‖  x₂ := M₂[q̄₂] *)
+      apply super_comm.
+      exact (Hloc _ _ _ _ (acts_ugate U1 qs1) (acts_meas M2 qs2 j2) Hq).
+    - (* x₁ := M₁[q̄₁]  ‖  q₂ := |0> *)
+      apply (super_init_comm Hloc _ qs1 q2 r (acts_meas M1 qs1 j1) Hq).
+    - (* x₁ := M₁[q̄₁]  ‖  U₂[q̄₂] *)
+      apply super_comm.
+      exact (Hloc _ _ _ _ (acts_meas M1 qs1 j1) (acts_ugate U2 qs2) Hq).
+    - (* x₁ := M₁[q̄₁]  ‖  x₂ := M₂[q̄₂] *)
+      apply super_comm.
+      exact (Hloc _ _ _ _ (acts_meas M1 qs1 j1) (acts_meas M2 qs2 j2) Hq).
+  Qed.
+
+  (* ---- a filter sees through a block that never writes its guard ---- *)
+
+  Definition store_indep (p : store -> bool) (xs : list var) : Prop :=
+    forall s x v, In x xs -> p (s [ x |-> v ]) = p s.
+
+  Lemma store_indep_app : forall p xs ys,
+      store_indep p (xs ++ ys) -> store_indep p xs /\ store_indep p ys.
+  Proof.
+    intros p xs ys H; split; intros s x v Hx; apply H, in_or_app;
+      [left | right]; exact Hx.
+  Qed.
+
+  Lemma store_indep_guard : forall b xs,
+      disjoint xs (bexpr_vars b) ->
+      store_indep (fun s => eval_bool (i_fn Σ) (i_rl Σ) s b) xs.
+  Proof.
+    intros b xs Hd s x v Hx.
+    apply eval_bool_update_notin, Hd, Hx.
+  Qed.
+
+  Lemma store_indep_negb : forall p xs,
+      store_indep p xs -> store_indep (fun s => negb (p s)) xs.
+  Proof. intros p xs H s x v Hx; cbn; rewrite H; [reflexivity | exact Hx]. Qed.
+
+  Lemma filter_comm : forall {A} (f g : A -> bool) (l : list A),
+      filter f (filter g l) = filter g (filter f l).
+  Proof.
+    intros A f g l; induction l as [| a l IH]; simpl; [reflexivity |].
+    destruct (f a) eqn:Ef; destruct (g a) eqn:Eg; simpl;
+      rewrite ?Ef, ?Eg, IH; reflexivity.
+  Qed.
+
+  Lemma ensemble_filter_comm : forall (p q : store -> bool) (E : ensemble dim),
+      ensemble_filter p (ensemble_filter q E)
+      = ensemble_filter q (ensemble_filter p E).
+  Proof. intros; unfold ensemble_filter; apply filter_comm. Qed.
+
+  Lemma ensemble_filter_app : forall (p : store -> bool) (E1 E2 : ensemble dim),
+      ensemble_filter p (E1 ++ E2)
+      = ensemble_filter p E1 ++ ensemble_filter p E2.
+  Proof. intros; unfold ensemble_filter; apply filter_app. Qed.
+
+  Lemma denote_filter_comm :
+    forall (p : store -> bool) (L : lblock) (E : ensemble dim),
+      store_indep p (lblock_change L) ->
+      ensemble_filter p (denote L E) = denote L (ensemble_filter p E).
+  Proof.
+    intros p L;
+      induction L as [| x e | q | U qs | x M qs | L1 IH1 L2 IH2 | b L1 IH1 L0 IH0];
+      intros E H; cbn [denote lblock_change] in *.
+    - (* skip *) reflexivity.
+    - (* x := e *)
+      unfold ensemble_filter;
+        induction E as [| [s r] E IH]; cbn [map filter fst]; [reflexivity |].
+      rewrite (H s x (eval_expr (i_fn Σ) s e) (or_introl eq_refl)).
+      destruct (p s); cbn [map filter fst]; rewrite IH; reflexivity.
+    - (* q := |0> *)
+      unfold ensemble_filter;
+        induction E as [| [s r] E IH]; cbn [map filter fst]; [reflexivity |].
+      destruct (p s); cbn [map filter fst]; rewrite IH; reflexivity.
+    - (* U[q̄] *)
+      unfold ensemble_filter;
+        induction E as [| [s r] E IH]; cbn [map filter fst]; [reflexivity |].
+      destruct (p s); cbn [map filter fst]; rewrite IH; reflexivity.
+    - (* x := M[q̄] *)
+      unfold ensemble_filter;
+        induction E as [| [s r] E IH]; cbn [flat_map filter fst]; [reflexivity |].
+      assert (Hgrp : forall (T : list nat) (g : nat -> qstate dim),
+                 filter (fun st => p (fst st))
+                        (map (fun m => (s [ x |-> m ], g m)) T)
+                 = if p s then map (fun m => (s [ x |-> m ], g m)) T else nil).
+      { induction T as [| m T IHT]; intros g; cbn [map filter fst];
+          [destruct (p s); reflexivity |].
+        rewrite (H s x m (or_introl eq_refl)), (IHT g).
+        destruct (p s); reflexivity. }
+      rewrite filter_app, (Hgrp (fst (i_mm Σ M qs))), IH.
+      destruct (p s); cbn [flat_map]; reflexivity.
+    - (* L1 ; L2 *)
+      destruct (store_indep_app _ _ _ H) as [Ha Hb].
+      rewrite IH2, IH1; [reflexivity | exact Ha | exact Hb].
+    - (* if b then L1 else L0 *)
+      destruct (store_indep_app _ _ _ H) as [Ha Hb].
+      rewrite ensemble_filter_app, IH1, IH0; [| exact Hb | exact Ha].
+      rewrite (ensemble_filter_comm p (fun s => eval_bool (i_fn Σ) (i_rl Σ) s b) E).
+      rewrite (ensemble_filter_comm p
+                 (fun s => negb (eval_bool (i_fn Σ) (i_rl Σ) s b)) E).
+      reflexivity.
+  Qed.
+
+  (* ---- non-interference is symmetric and inherited by sub-blocks ----- *)
+
+  Lemma non_interfering_sym : forall L1 L2,
+      non_interfering L1 L2 -> non_interfering L2 L1.
+  Proof.
+    intros L1 L2 (H1 & H2 & H3 & H4); repeat split;
+      auto using disjoint_sym.
+  Qed.
+
+  Lemma non_interfering_incl : forall L L' M,
+      incl (lblock_change L') (lblock_change L) ->
+      incl (lblock_read L') (lblock_read L) ->
+      incl (lblock_qvar L') (lblock_qvar L) ->
+      non_interfering L M -> non_interfering L' M.
+  Proof.
+    intros L L' M Hc Hr Hq (H1 & H2 & H3 & H4); repeat split.
+    - eapply disjoint_incl; [exact H1 | exact Hc | apply incl_refl].
+    - eapply disjoint_incl; [exact H2 | exact Hc | apply incl_refl].
+    - eapply disjoint_incl; [exact H3 | apply incl_refl | exact Hr].
+    - eapply disjoint_incl; [exact H4 | exact Hq | apply incl_refl].
+  Qed.
+
+  Lemma non_interfering_seq : forall A B M,
+      non_interfering (l_seq A B) M -> non_interfering A M /\ non_interfering B M.
+  Proof.
+    intros A B M H; split; eapply non_interfering_incl; try exact H;
+      cbn [lblock_change lblock_read lblock_qvar];
+      auto using incl_appl, incl_appr, incl_refl.
+  Qed.
+
+  Lemma non_interfering_if : forall b A B M,
+      non_interfering (l_if b A B) M ->
+      non_interfering A M /\ non_interfering B M.
+  Proof.
+    intros b A B M H; split; eapply non_interfering_incl; try exact H;
+      cbn [lblock_change lblock_read lblock_qvar];
+      auto using incl_appl, incl_appr, incl_refl.
+  Qed.
+
+  Lemma non_interfering_guard : forall b A B M,
+      non_interfering (l_if b A B) M ->
+      disjoint (lblock_change M) (bexpr_vars b).
+  Proof.
+    intros b A B M (_ & _ & H3 & _).
+    eapply disjoint_incl; [exact H3 | apply incl_refl |].
+    cbn [lblock_read]; apply incl_appl, incl_refl.
+  Qed.
+
+  (** Two non-interfering ATOMIC blocks commute. **)
+  Lemma denote_atom_comm : local_ops ->
+    forall L1 L2, atomic L1 -> atomic L2 -> non_interfering L1 L2 ->
+      forall E, Permutation (denote L1 (denote L2 E)) (denote L2 (denote L1 E)).
+  Proof.
+    intros Hloc L1 L2 H1 H2 (Hcc & Hcr & Hrc & Hq) E.
+    rewrite !(denote_atomic L1 H1), !(denote_atomic L2 H2).
+    apply act_comm.
+    - apply astore_comm; assumption.
+    - apply aqmap_comm; assumption.
+  Qed.
+
+  (** …then an atomic block commutes with an arbitrary one, by induction on
+      the arbitrary one.  [if] is where the classical footprint earns its
+      keep: the guard must read the same store on both sides. **)
+  Lemma denote_comm_atom : local_ops ->
+    forall L2 L1, atomic L1 -> non_interfering L1 L2 ->
+      forall E, Permutation (denote L1 (denote L2 E)) (denote L2 (denote L1 E)).
+  Proof.
+    intros Hloc L2;
+      induction L2 as [| x e | q | U qs | x M qs | A IHA B IHB | b A IHA B IHB];
+      intros L1 H1 Hni E.
+    1-5: apply denote_atom_comm; [exact Hloc | exact H1 | constructor | exact Hni].
+    - (* A ; B *)
+      destruct (non_interfering_seq A B L1 (non_interfering_sym _ _ Hni))
+        as [HA HB].
+      cbn [denote].
+      eapply Permutation_trans;
+        [ apply (IHB L1 H1 (non_interfering_sym _ _ HB)) |].
+      apply denote_perm, (IHA L1 H1 (non_interfering_sym _ _ HA)).
+    - (* if b then A else B *)
+      destruct (non_interfering_if b A B L1 (non_interfering_sym _ _ Hni))
+        as [HA HB].
+      pose proof (non_interfering_guard b A B L1
+                    (non_interfering_sym _ _ Hni)) as Hg.
+      cbn [denote].
+      eapply Permutation_trans; [apply denote_app |].
+      eapply Permutation_trans.
+      { apply Permutation_app;
+          [ apply (IHA L1 H1 (non_interfering_sym _ _ HA))
+          | apply (IHB L1 H1 (non_interfering_sym _ _ HB)) ]. }
+      rewrite (denote_filter_comm _ L1 E (store_indep_guard b _ Hg)).
+      rewrite (denote_filter_comm _ L1 E
+                 (store_indep_negb _ _ (store_indep_guard b _ Hg))).
+      apply Permutation_refl.
+  Qed.
+
+  (** Paper Lemma 1: two non-interfering local blocks commute. **)
+  Lemma denote_comm : local_ops ->
+    forall L1 L2, non_interfering L1 L2 ->
+      forall E, Permutation (denote L1 (denote L2 E)) (denote L2 (denote L1 E)).
+  Proof.
+    intros Hloc L1;
+      induction L1 as [| x e | q | U qs | x M qs | A IHA B IHB | b A IHA B IHB];
+      intros L2 Hni E.
+    1-5: apply (denote_comm_atom Hloc L2); [constructor | exact Hni].
+    - (* A ; B *)
+      destruct (non_interfering_seq A B L2 Hni) as [HA HB].
+      cbn [denote].
+      eapply Permutation_trans; [apply denote_perm, (IHA L2 HA) |].
+      apply (IHB L2 HB).
+    - (* if b then A else B *)
+      destruct (non_interfering_if b A B L2 Hni) as [HA HB].
+      pose proof (non_interfering_guard b A B L2 Hni) as Hg.
+      cbn [denote].
+      rewrite (denote_filter_comm _ L2 E (store_indep_guard b _ Hg)).
+      rewrite (denote_filter_comm _ L2 E
+                 (store_indep_negb _ _ (store_indep_guard b _ Hg))).
+      eapply Permutation_trans;
+        [ apply Permutation_app; [apply (IHA L2 HA) | apply (IHB L2 HB)] |].
+      apply Permutation_sym, denote_app.
+  Qed.
+
+  (** ** 5. Normalising an interleaving ********************************
+
+      A program all of whose leaves are communication-free denotes as the
+      sequentialisation of the blocks its leaves still owe.  Every step
+      preserves that denotation — Lemma 1 is what pays for a step taken out
+      of displayed order — so a terminal collapse IS it.
+  *********************************************************************)
+
+  (* ---- footprints of a sequentialised row --------------------------- *)
+
+  Lemma lblock_change_lseq : forall d,
+      lblock_change (lseq d) = row_flat lblock_change d.
+  Proof. induction d as [D | d1 IH1 d2 IH2]; simpl; congruence. Qed.
+
+  Lemma lblock_read_lseq : forall d,
+      lblock_read (lseq d) = row_flat lblock_read d.
+  Proof. induction d as [D | d1 IH1 d2 IH2]; simpl; congruence. Qed.
+
+  Lemma lblock_qvar_lseq : forall d,
+      lblock_qvar (lseq d) = row_flat lblock_qvar d.
+  Proof. induction d as [D | d1 IH1 d2 IH2]; simpl; congruence. Qed.
+
+  Lemma disjoint_flat_map : forall {A} (f g : A -> list nat) (l1 l2 : list A),
+      (forall a b, In a l1 -> In b l2 -> disjoint (f a) (g b)) ->
+      disjoint (flat_map f l1) (flat_map g l2).
+  Proof.
+    intros A f g l1 l2 H z Hz1 Hz2.
+    apply in_flat_map in Hz1 as (a & Ha & Hza).
+    apply in_flat_map in Hz2 as (b & Hb & Hzb).
+    exact (H a b Ha Hb z Hza Hzb).
+  Qed.
+
+  (** Pairwise non-interference of the leaves is non-interference of the
+      two sequentialisations — the step from DisjMP to Lemma 1. **)
+  Lemma non_interfering_lseq : forall d1 d2,
+      (forall D1 D2, In D1 (row_leaves d1) -> In D2 (row_leaves d2) ->
+                     non_interfering D1 D2) ->
+      non_interfering (lseq d1) (lseq d2).
+  Proof.
+    intros d1 d2 H; split; [| split; [| split]].
+    - rewrite !lblock_change_lseq, !row_flat_leaves.
+      apply disjoint_flat_map; intros a b Ha Hb; exact (proj1 (H a b Ha Hb)).
+    - rewrite lblock_change_lseq, lblock_read_lseq, !row_flat_leaves.
+      apply disjoint_flat_map; intros a b Ha Hb.
+      exact (proj1 (proj2 (H a b Ha Hb))).
+    - rewrite lblock_change_lseq, lblock_read_lseq, !row_flat_leaves.
+      apply disjoint_flat_map; intros a b Ha Hb.
+      exact (proj1 (proj2 (proj2 (H b a Hb Ha)))).
+    - rewrite !lblock_qvar_lseq, !row_flat_leaves.
+      apply disjoint_flat_map; intros a b Ha Hb.
+      exact (proj2 (proj2 (proj2 (H a b Ha Hb)))).
+  Qed.
+
+  Lemma ForallOrdPairs_app_inv : forall {A} (R : A -> A -> Prop) (l1 l2 : list A),
+      ForallOrdPairs R (l1 ++ l2) ->
+      ForallOrdPairs R l1 /\ ForallOrdPairs R l2
+      /\ (forall x y, In x l1 -> In y l2 -> R x y).
+  Proof.
+    intros A R l1; induction l1 as [| a l1 IH]; intros l2 H; simpl in H.
+    - split; [constructor | split; [exact H | intros x y []]].
+    - inversion H as [| a' l' Hhd Htl]; subst.
+      destruct (IH l2 Htl) as (H1 & H2 & H3).
+      apply Forall_app in Hhd as [Hh1 Hh2].
+      split; [constructor; assumption | split; [exact H2 |]].
+      intros x y [Hx | Hx] Hy;
+        [subst x; rewrite Forall_forall in Hh2; apply Hh2, Hy
+        | apply H3; assumption].
+  Qed.
+
+  (* ---- a step only shrinks a leaf's footprint ----------------------- *)
+
+  Definition footprint_le (D' D : lblock) : Prop :=
+    incl (lblock_change D') (lblock_change D)
+    /\ incl (lblock_read D') (lblock_read D)
+    /\ incl (lblock_qvar D') (lblock_qvar D).
+
+  Definition blocks_le (d' d : lrow) : Prop :=
+    Forall2 footprint_le (row_leaves d') (row_leaves d).
+
+  Lemma blocks_le_refl : forall d, blocks_le d d.
+  Proof.
+    intro d; unfold blocks_le.
+    induction (row_leaves d) as [| D l IH]; constructor;
+      [repeat split; apply incl_refl | exact IH].
+  Qed.
+
+  Lemma blocks_le_par : forall a' a b' b,
+      blocks_le a' a -> blocks_le b' b -> blocks_le (par a' b') (par a b).
+  Proof.
+    intros a' a b' b Ha Hb; unfold blocks_le; simpl; apply Forall2_app; assumption.
+  Qed.
+
+  Lemma non_interfering_le : forall D1' D1 D2' D2,
+      footprint_le D1' D1 -> footprint_le D2' D2 ->
+      non_interfering D1 D2 -> non_interfering D1' D2'.
+  Proof.
+    intros D1' D1 D2' D2 (Hc1 & Hr1 & Hq1) (Hc2 & Hr2 & Hq2) (H1 & H2 & H3 & H4);
+      split; [| split; [| split]].
+    - eapply disjoint_incl; [exact H1 | exact Hc1 | exact Hc2].
+    - eapply disjoint_incl; [exact H2 | exact Hc1 | exact Hr2].
+    - eapply disjoint_incl; [exact H3 | exact Hc2 | exact Hr1].
+    - eapply disjoint_incl; [exact H4 | exact Hq1 | exact Hq2].
+  Qed.
+
+  Lemma Forall2_In : forall {A B} (R : A -> B -> Prop) (l : list A) (m : list B) a,
+      Forall2 R l m -> In a l -> exists b, In b m /\ R a b.
+  Proof.
+    intros A B R l m a H; induction H as [| x y l m Hxy Hl IH]; intros Hin.
+    - destruct Hin.
+    - destruct Hin as [Heq | Hin];
+        [subst x; exists y; split; [left; reflexivity | exact Hxy] |].
+      destruct (IH Hin) as (b & Hb & HRb).
+      exists b; split; [right; exact Hb | exact HRb].
+  Qed.
+
+  Lemma Forall2_Forall_ni : forall (D' D : lblock) (l' l : list lblock),
+      footprint_le D' D -> Forall2 footprint_le l' l ->
+      Forall (non_interfering D) l -> Forall (non_interfering D') l'.
+  Proof.
+    intros D' D l' l HD H; induction H as [| a' a l1' l1 Ha Hl IH]; intros Hf.
+    - constructor.
+    - inversion Hf as [| ? ? Hh Ht]; subst.
+      constructor; [eapply non_interfering_le; eassumption | apply IH, Ht].
+  Qed.
+
+  Lemma blocks_le_disj : forall d' d, blocks_le d' d -> lrow_disj d -> lrow_disj d'.
+  Proof.
+    unfold lrow_disj, DisjMP, blocks_le.
+    intros d' d H; revert H; generalize (row_leaves d') (row_leaves d); clear d' d.
+    intros l' l H; induction H as [| a' a l1' l1 Ha Hl IH]; intros Hop.
+    - constructor.
+    - inversion Hop as [| x xs Hf Hrest]; subst.
+      constructor; [eapply Forall2_Forall_ni; eassumption | apply IH, Hrest].
+  Qed.
+
+  (** The cross condition survives a step on one side. **)
+  Lemma blocks_le_cross : forall d1 d2' d2,
+      blocks_le d2' d2 ->
+      (forall D1 D2, In D1 (row_leaves d1) -> In D2 (row_leaves d2) ->
+                     non_interfering D1 D2) ->
+      forall D2' D1, In D2' (row_leaves d2') -> In D1 (row_leaves d1) ->
+                     non_interfering D2' D1.
+  Proof.
+    intros d1 d2' d2 Hle Hcross D2' D1 H2' H1.
+    destruct (Forall2_In _ _ _ _ Hle H2') as (D2 & HD2 & Hfp).
+    eapply non_interfering_le;
+      [ exact Hfp | repeat split; apply incl_refl
+      | apply non_interfering_sym, Hcross; assumption ].
+  Qed.
+
+  (* ---- the blocks a program still owes ------------------------------ *)
+
+  Definition proc_block (T : process) : lblock :=
+    match T with terminated => l_skip | phase R _ _ => residual_lblock R end.
+
+  Definition prog_blocks (P : program) : lrow := row_map proc_block P.
+  Definition prog_lseq (P : program) : lblock := lseq (prog_blocks P).
+
+  (** The execution invariant of a communication-free row: every leaf is ↓
+      or a single local block with an exhausted phase behind it. **)
+  Definition dleaf (T : process) : Prop :=
+    T = terminated \/ exists L, T = phase (r_more L) nil terminated.
+  Definition dshape (P : program) : Prop := row_all dleaf P.
+
+  Lemma row_all_map : forall {A B} (Q : B -> Prop) (f : A -> B) (r : row A),
+      (forall a, Q (f a)) -> row_all Q (row_map f r).
+  Proof. intros A B Q f r H; induction r; simpl; auto. Qed.
+
+  Lemma row_all_in : forall {A} (Q : A -> Prop) (r : row A) (a : A),
+      row_all Q r -> In a (row_leaves r) -> Q a.
+  Proof.
+    intros A Q r; induction r as [b | r1 IH1 r2 IH2]; intros a H Hin; simpl in *.
+    - destruct Hin as [Heq | []]; subst; exact H.
+    - destruct H as [H1 H2]; apply in_app_or in Hin as [Hin | Hin];
+        [apply IH1 | apply IH2]; assumption.
+  Qed.
+
+  Lemma replace_leaf_in : forall {A} (a b : A) (r r' : row A),
+      replace_leaf a b r r' -> In a (row_leaves r).
+  Proof.
+    intros A a b r r' H; induction H; simpl;
+      [left; reflexivity | apply in_or_app; left | apply in_or_app; right];
+      assumption.
+  Qed.
+
+  Lemma prog_blocks_map : forall (f : lblock -> process),
+      (forall D, proc_block (f D) = D) -> forall d, prog_blocks (row_map f d) = d.
+  Proof.
+    intros f Hf d; unfold prog_blocks;
+      induction d as [D | d1 IH1 d2 IH2]; simpl; congruence.
+  Qed.
+
+  Lemma prog_lseq_par : forall P1 P2,
+      prog_lseq (par P1 P2) = l_seq (prog_lseq P1) (prog_lseq P2).
+  Proof. reflexivity. Qed.
+
+  Lemma proc_block_advance : forall R,
+      proc_block (advance R nil terminated) = residual_lblock R.
+  Proof. intros [| L]; reflexivity. Qed.
+
+  Lemma denote_residual_lblock : forall R E,
+      denote (residual_lblock R) E = residual_denote R E.
+  Proof. intros [| L] E; reflexivity. Qed.
+
+  Lemma residual_lblock_change : forall R,
+      lblock_change (residual_lblock R) = residual_change R.
+  Proof. intros [| L]; reflexivity. Qed.
+
+  Lemma residual_lblock_read : forall R,
+      lblock_read (residual_lblock R) = residual_read R.
+  Proof. intros [| L]; reflexivity. Qed.
+
+  Lemma residual_lblock_qvar : forall R,
+      lblock_qvar (residual_lblock R) = residual_qvar R.
+  Proof. intros [| L]; reflexivity. Qed.
+
+  Lemma prog_terminated_lseq : forall P E,
+      prog_terminated P -> denote (prog_lseq P) E = E.
+  Proof.
+    intros P; induction P as [T | P1 IH1 P2 IH2]; intros E HT.
+    - cbn in HT; subst T; reflexivity.
+    - destruct HT as [H1 H2]; rewrite prog_lseq_par; cbn [denote].
+      rewrite IH1, IH2; auto.
+  Qed.
+
+  (* ---- a step preserves the shape and shrinks the blocks ------------ *)
+
+  Lemma local_step_residual_qvar :
+    forall (L : lblock) (E : ensemble dim) (G : local_config dim),
+      Σ ⊳ ‹ L, E › →ₗ G ->
+      Forall (fun c => incl (residual_qvar (fst c)) (lblock_qvar L)) G.
+  Proof.
+    intros L E G Hstep; induction Hstep;
+      cbn [residual_qvar lblock_qvar].
+    1-5: constructor; [apply incl_nil_l | constructor].
+    - (* seq *)
+      rewrite Forall_map. eapply Forall_impl; [| exact IHHstep].
+      intros [rd Ee] Hq; cbn [fst] in *.
+      destruct rd; cbn [residual_qvar lblock_qvar] in *; intros z Hz.
+      + apply in_or_app; right; exact Hz.
+      + apply in_app_or in Hz; apply in_or_app;
+          destruct Hz; [left; apply Hq | right]; auto.
+    - (* if *)
+      constructor; [| constructor; [| constructor]];
+        cbn [fst residual_qvar]; intros z Hz; apply in_or_app;
+        [left | right]; exact Hz.
+  Qed.
+
+  Lemma dstep_shape_blocks :
+    forall (P : program) (E : ensemble dim) (G : distri_config dim),
+      Σ ⊳ ‹ P, E › ⇝ G -> dshape P ->
+      Forall (fun c => dshape (fst c)
+                       /\ blocks_le (prog_blocks (fst c)) (prog_blocks P)) G.
+  Proof.
+    intros P E G Hstep; induction Hstep; intros Hsh.
+    - (* ds_local *)
+      cbn [row_all] in Hsh; destruct Hsh as [Hbad | (L0 & HL0)]; [discriminate |].
+      inversion HL0; subst.
+      pose proof (local_step_residual_incl _ _ _ H) as Hcr.
+      pose proof (local_step_residual_qvar _ _ _ H) as Hqv.
+      rewrite Forall_map. eapply Forall_impl with
+        (P := fun c => (incl (residual_change (fst c)) (lblock_change L0)
+                        /\ incl (residual_read (fst c)) (lblock_read L0))
+                       /\ incl (residual_qvar (fst c)) (lblock_qvar L0)).
+      2:{ apply Forall_and; assumption. }
+      intros [rd Ee] [[Hc Hr] Hq]; cbn [fst] in *; split.
+      + cbn [row_all]; destruct rd; cbn [advance];
+          [left; reflexivity | right; eexists; reflexivity].
+      + unfold blocks_le, prog_blocks; cbn [row_map row_leaves].
+        constructor; [| constructor].
+        unfold footprint_le; rewrite proc_block_advance.
+        cbn [proc_block residual_lblock].
+        rewrite residual_lblock_change, residual_lblock_read,
+                residual_lblock_qvar.
+        repeat split; assumption.
+    - (* ds_par_l *)
+      destruct Hsh as [Hs1 Hs2].
+      rewrite Forall_map. eapply Forall_impl; [| exact (IHHstep Hs1)].
+      intros [Pp Ee] [Hs Hb]; cbn [fst] in *; split.
+      + split; assumption.
+      + apply blocks_le_par; [exact Hb | apply blocks_le_refl].
+    - (* ds_par_r *)
+      destruct Hsh as [Hs1 Hs2].
+      rewrite Forall_map. eapply Forall_impl; [| exact (IHHstep Hs2)].
+      intros [Pp Ee] [Hs Hb]; cbn [fst] in *; split.
+      + split; assumption.
+      + apply blocks_le_par; [apply blocks_le_refl | exact Hb].
+    - (* ds_comm_lr — an all-ε row has no ↓;K leaf *)
+      exfalso; destruct Hsh as [Hs1 _].
+      destruct (row_all_in _ _ _ Hs1 (replace_leaf_in _ _ _ _ H1))
+        as [Hbad | (L0 & Hbad)]; discriminate.
+    - (* ds_comm_rl *)
+      exfalso; destruct Hsh as [Hs1 _].
+      destruct (row_all_in _ _ _ Hs1 (replace_leaf_in _ _ _ _ H2))
+        as [Hbad | (L0 & Hbad)]; discriminate.
+  Qed.
+
+  (* ---- the denotation of a mixed configuration ---------------------- *)
+
+  Definition ddenote (G : distri_config dim) : ensemble dim :=
+    flat_map (fun c => denote (prog_lseq (fst c)) (snd c)) G.
+
+  Definition dcfg_ok (G : distri_config dim) : Prop :=
+    Forall (fun c => dshape (fst c) /\ lrow_disj (prog_blocks (fst c))) G.
+
+  Lemma ddenote_app : forall G1 G2 : distri_config dim,
+      ddenote (G1 ⊎ G2) = ddenote G1 ++ ddenote G2.
+  Proof. intros; unfold ddenote; apply flat_map_app. Qed.
+
+  Lemma ddenote_norm : forall G, ddenote (norm G) = ddenote G.
+  Proof.
+    intros G; induction G as [| [P E] G IH]; [reflexivity |].
+    unfold norm, ddenote in *; simpl.
+    destruct E as [| st E']; simpl;
+      [rewrite IH, denote_nil | rewrite IH]; reflexivity.
+  Qed.
+
+  Lemma denote_flat_map_gen :
+    forall {A} (L : lblock) (f : A -> ensemble dim) (l : list A),
+      Permutation (flat_map (fun a => denote L (f a)) l) (denote L (flat_map f l)).
+  Proof.
+    intros A L f l; induction l as [| a l IH]; simpl.
+    - rewrite denote_nil; apply Permutation_refl.
+    - eapply Permutation_trans; [apply Permutation_app_head, IH |].
+      apply Permutation_sym, denote_app.
+  Qed.
+
+  Lemma dstep_denote : local_ops ->
+    forall (P : program) (E : ensemble dim) (G : distri_config dim),
+      Σ ⊳ ‹ P, E › ⇝ G -> dshape P -> lrow_disj (prog_blocks P) ->
+      Permutation (ddenote G) (denote (prog_lseq P) E).
+  Proof.
+    intros Hloc P E G Hstep; induction Hstep; intros Hsh Hdisj.
+    - (* ds_local: the leaf's own block steps, in place *)
+      cbn [row_all] in Hsh; destruct Hsh as [Hbad | (L0 & HL0)]; [discriminate |].
+      inversion HL0; subst.
+      unfold ddenote; rewrite flat_map_map; cbn [fst snd].
+      rewrite (flat_map_ext' _ (fun c => residual_denote (fst c) (snd c)) Gl)
+        by (intros [rd Ee]; cbn [fst snd];
+            unfold prog_lseq, prog_blocks; cbn [row_map lseq];
+            rewrite proc_block_advance; apply denote_residual_lblock).
+      eapply local_step_denote; eassumption.
+    - (* ds_par_l: the step is already leftmost *)
+      destruct Hsh as [Hs1 Hs2].
+      unfold lrow_disj in Hdisj; cbn [prog_blocks row_map row_leaves] in Hdisj.
+      destruct (ForallOrdPairs_app_inv _ _ _ Hdisj) as (Hd1 & Hd2 & Hcross).
+      rewrite prog_lseq_par; cbn [denote].
+      unfold ddenote; rewrite flat_map_map; cbn [fst snd].
+      rewrite (flat_map_ext' _
+                 (fun c => denote (prog_lseq P2) (denote (prog_lseq (fst c)) (snd c)))
+                 G1)
+        by (intros c; rewrite prog_lseq_par; reflexivity).
+      eapply Permutation_trans; [apply denote_flat_map_gen |].
+      apply denote_perm, (IHHstep Hs1 Hd1).
+    - (* ds_par_r: the step is out of displayed order — Lemma 1 pays *)
+      destruct Hsh as [Hs1 Hs2].
+      unfold lrow_disj in Hdisj; cbn [prog_blocks row_map row_leaves] in Hdisj.
+      destruct (ForallOrdPairs_app_inv _ _ _ Hdisj) as (Hd1 & Hd2 & Hcross).
+      pose proof (dstep_shape_blocks _ _ _ Hstep Hs2) as Hbl.
+      rewrite prog_lseq_par; cbn [denote].
+      unfold ddenote; rewrite flat_map_map; cbn [fst snd].
+      rewrite (flat_map_ext' _
+                 (fun c => denote (prog_lseq (fst c)) (denote (prog_lseq P1) (snd c)))
+                 G2)
+        by (intros c; rewrite prog_lseq_par; reflexivity).
+      rewrite Forall_forall in Hbl.
+      eapply Permutation_trans.
+      { apply Permutation_flat_map_in; intros c Hc.
+        apply denote_comm; [exact Hloc |].
+        apply non_interfering_lseq.
+        eapply blocks_le_cross;
+          [ exact (proj2 (Hbl c Hc)) | exact Hcross ]. }
+      eapply Permutation_trans; [apply denote_flat_map_gen |].
+      eapply Permutation_trans;
+        [ apply denote_perm, (IHHstep Hs2 Hd2) |].
+      apply denote_comm; [exact Hloc |].
+      apply non_interfering_lseq, Hcross.
+    - (* ds_comm_lr — ruled out: no leaf carries a pending endpoint *)
+      exfalso; destruct Hsh as [Hs1 _].
+      destruct (row_all_in _ _ _ Hs1 (replace_leaf_in _ _ _ _ H1))
+        as [Hbad | (L0 & Hbad)]; discriminate.
+    - (* ds_comm_rl *)
+      exfalso; destruct Hsh as [Hs1 _].
+      destruct (row_all_in _ _ _ Hs1 (replace_leaf_in _ _ _ _ H2))
+        as [Hbad | (L0 & Hbad)]; discriminate.
+  Qed.
+
+  Lemma mixed_denote : local_ops -> forall (G G' : distri_config dim),
+      mixed_step Σ G G' -> dcfg_ok G ->
+      dcfg_ok G' /\ Permutation (ddenote G') (ddenote G).
+  Proof.
+    intros Hloc G G' Hstep Hok.
+    destruct Hstep as [G D E G0 G1 Hperm Hd].
+    pose proof (Permutation_Forall Hperm Hok) as Hok'.
+    inversion Hok' as [| c G0' HD HG0]; subst.
+    destruct HD as [Hsh Hdisj]; cbn [fst] in Hsh, Hdisj.
+    split.
+    - apply Forall_filter_keep, Forall_app; split; [| exact HG0].
+      pose proof (dstep_shape_blocks _ _ _ Hd Hsh) as Hbl.
+      eapply Forall_impl; [| exact Hbl].
+      intros c0 [Hs Hb]; split; [exact Hs | eapply blocks_le_disj; eassumption].
+    - rewrite ddenote_norm, ddenote_app.
+      eapply Permutation_trans.
+      + apply Permutation_app_tail. eapply dstep_denote; eassumption.
+      + apply Permutation_sym.
+        eapply Permutation_trans.
+        * unfold ddenote; apply permutation_flat_map; exact Hperm.
+        * unfold ddenote; simpl; apply Permutation_refl.
+  Qed.
+
+  Lemma star_denote : local_ops -> forall (G G' : distri_config dim),
+      step_star Σ G G' -> dcfg_ok G ->
+      dcfg_ok G' /\ Permutation (ddenote G') (ddenote G).
+  Proof.
+    intros Hloc G G' Hstar; induction Hstar as [G | G1 G2 G3 Hmix Hstar IH];
+      intros Hok.
+    - split; [assumption | apply Permutation_refl].
+    - destruct (mixed_denote Hloc _ _ Hmix Hok) as [Hok2 Hp2].
+      destruct (IH Hok2) as [Hok3 Hp3].
+      split; [assumption | eapply Permutation_trans; eauto].
+  Qed.
+
+  Lemma terminal_ddenote : forall (G : distri_config dim),
+      terminal G -> ddenote G = collapse G.
+  Proof.
+    intros G Hterm; unfold terminal in Hterm.
+    induction Hterm as [| [P E] G' HP HF IH]; [reflexivity |].
+    unfold ddenote, collapse in *; simpl. rewrite IH. f_equal.
+    cbn [fst snd] in HP |- *. apply prog_terminated_lseq, HP.
+  Qed.
+
+  (** Adequacy for a communication-free row: the terminal collapse of ANY
+      interleaving is the denotation of the DISPLAYED sequentialisation. **)
+  Lemma prog_adequacy : local_ops ->
+    forall (P : program) (st : cqstate dim) (E : ensemble dim),
+      dshape P -> lrow_disj (prog_blocks P) ->
+      Term Σ P st E -> Permutation E (denote (prog_lseq P) (st :: nil)).
+  Proof.
+    intros Hloc P st E Hsh Hdisj (G & Hstar & Hterm & Hcoll).
+    assert (Hok0 : dcfg_ok ({|| P, st :: nil ||}))
+      by (constructor; [split; assumption | constructor]).
+    destruct (star_denote Hloc _ _ Hstar Hok0) as [_ Hp].
+    rewrite (terminal_ddenote _ Hterm), Hcoll in Hp.
+    unfold ddenote in Hp; simpl in Hp. rewrite app_nil_r in Hp. exact Hp.
   Qed.
 
 

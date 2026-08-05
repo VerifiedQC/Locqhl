@@ -201,11 +201,37 @@ Section Spec.
   Lemma HX    : i_uu Sig X ([B]) = pad_u 3 B σx.
   Proof. reflexivity. Qed.
 
-  (** Sig interprets every symbol by a well-formed operator and every
-      measurement by a finite family — the side condition [soundness] needs. *)
+  (** Every operator Sig hands out is a padding of a one- or two-qubit gate
+      at the very qubits the primitive names (off-pattern it is I or Zero),
+      which is what makes it LOCAL — the premise Par-Disjoint-MP needs. *)
+  Lemma tele_padded : forall K qs, acts_on Sig K qs -> padded K qs.
+  Proof.
+    intros K qs H; destruct H as [U qs | M qs m | q | q].
+    - unfold Sig, tele_uu; cbn [i_uu].
+      destruct U as [|[|[|[|U]]]]; destruct qs as [|a [|b [|c qs]]]; cbn;
+        constructor; auto with wf_db.
+    - unfold Sig, tele_mm; cbn [i_mm snd].
+      destruct qs as [|a [|b qs]]; cbn;
+        repeat match goal with
+               | |- padded (if ?x then _ else _) _ => destruct x
+               end;
+        constructor; auto with wf_db.
+    - constructor; auto with wf_db.
+    - constructor; auto with wf_db.
+  Qed.
+
+  Lemma tele_local_ops : local_ops Sig.
+  Proof.
+    intros K1 qs1 K2 qs2 H1 H2 Hd.
+    eapply padded_commute; eauto using tele_padded.
+  Qed.
+
+  (** Sig interprets every symbol by a well-formed operator, every
+      measurement by a finite family, and every primitive locally — the side
+      condition [soundness] needs. *)
   Lemma tele_wf_interp : wf_interp Sig.
   Proof.
-    split; [| split; [| split]].
+    split; [| split; [| split; [| split]]].
     - (* unitaries are WF *)
       intros U qs. unfold Sig, tele_uu; cbn [i_uu].
       destruct U as [|[|[|[|U]]]]; destruct qs as [|a [|b [|c qs]]]; cbn;
@@ -232,6 +258,8 @@ Section Spec.
       intros M qs. unfold Sig, tele_mm; cbn [i_mm].
       destruct qs as [|a [|b qs]]; cbn;
         repeat constructor; cbn; intuition congruence.
+    - (* the primitives are local *)
+      exact tele_local_ops.
   Qed.
 
   

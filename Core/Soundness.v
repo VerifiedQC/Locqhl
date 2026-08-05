@@ -7,10 +7,11 @@
     argument needs, so this is a statement about the proof system rather
     than about one class of programs.
 
-    WIP after the row refactor: the per-rule lemmas below are stated against
-    the new three-judgment system (dloc on lrow, ⊢ₖ on krow, ⊢ₚ on program)
-    and left Admitted.  The assembly — the induction principle and Theorem
-    4.1 — is machine-checked.
+    The per-rule lemmas are stated against the three-judgment system (dloc on
+    lrow, ⊢ₖ on krow, ⊢ₚ on program).  Conseq, Done, Par-Disjoint-MP,
+    Comm-Done, Aux-Subst and Branch-Accum are machine-checked, as is the
+    assembly — the induction principle and Theorem 4.1.  Comm-Select-MP and
+    Par-Comp-MP are the two open ones.
 ** **)
 
 From Stdlib Require Import Lists.List.
@@ -80,20 +81,51 @@ Section Soundness.
   Definition krow_prog (k : krow) : program :=
     row_map (fun K => advance r_done K terminated) k.
 
-  (** Par-Disjoint-MP: interference freedom normalises every interleaving of
-      the row to its displayed sequentialisation [lseq d]. *)
+  (** [lrow_prog d] is exactly a program whose leaves are communication-free
+      and still owe the blocks of [d]. *)
+  Lemma lrow_prog_blocks : forall d, prog_blocks (lrow_prog d) = d.
+  Proof. intro d; apply prog_blocks_map; reflexivity. Qed.
+
+  Lemma lrow_prog_lseq : forall d, prog_lseq (lrow_prog d) = lseq d.
+  Proof. intro d; unfold prog_lseq; rewrite lrow_prog_blocks; reflexivity. Qed.
+
+  Lemma lrow_prog_shape : forall d, dshape (lrow_prog d).
+  Proof. intro d; apply row_all_map; intro D; right; eexists; reflexivity. Qed.
+
+  (** Par-Disjoint-MP: interference freedom (paper Lemma 1, mechanised as
+      [denote_comm]) normalises every interleaving of the row to its
+      displayed sequentialisation [lseq d], so the terminal collapse of ANY
+      run is the one the premise reasons about — [prog_adequacy] — and
+      [denote_sound] then reads off the degree. *)
   Lemma par_disjoint_sound :
+    wf_interp Σ ->
     forall (Q R : assertion dim) (d : lrow),
       lrow_disj d ->
       Σ ⊢ₗ {{ Q }} lseq d {{ R }} ->
       Σ ⊨ {{ Q }} lrow_prog d {{ R }}.
-  Admitted.
+  Proof.
+    intros interp_ok Q R d Hdisj Hder s r HWFr Hherm Hpsd Hh Hdef E HTerm.
+    assert (Hok : ensemble_ok ((s, r) :: nil))
+      by (constructor; [repeat split; assumption | constructor]).
+    assert (Hdisj' : lrow_disj (prog_blocks (lrow_prog d)))
+      by (rewrite lrow_prog_blocks; exact Hdisj).
+    pose proof (prog_adequacy Σ (wf_interp_local Σ interp_ok) (lrow_prog d)
+                  (s, r) E (lrow_prog_shape d) Hdisj' HTerm) as Hperm.
+    rewrite lrow_prog_lseq in Hperm.
+    pose proof (denote_sound Σ interp_ok Q R (lseq d) Hder _ Hok) as Hle.
+    assert (Hsing : forall (A : assertion dim) (st : cqstate dim),
+               total_degree Σ A (st :: nil) = degree Σ A st)
+      by (intros A st; unfold total_degree; simpl; ring).
+    rewrite (total_degree_perm Σ R _ _ Hperm).
+    rewrite Hsing in Hle. exact Hle.
+  Qed.
 
   Lemma dloc_sound :
+    wf_interp Σ ->
     forall (Q R : assertion dim) (d : lrow),
       dloc Σ Q d R -> Σ ⊨ {{ Q }} lrow_prog d {{ R }}.
   Proof.
-    intros Q R d Hd; destruct Hd as [Q0 R0 d0 Hdisj Hloc].
+    intros interp_ok Q R d Hd; destruct Hd as [Q0 R0 d0 Hdisj Hloc].
     apply par_disjoint_sound; assumption.
   Qed.
 
@@ -301,7 +333,7 @@ Section Soundness.
       - (* Par-Comp-MP *)
         intros q0 q1 q2 q3 p d k t Hcut Hwf Hd Hk Ht IHt.
         eapply par_comp_sound; try eassumption.
-        + exact (dloc_sound _ _ _ Hd).
+        + exact (dloc_sound interp_ok _ _ _ Hd).
         + exact (comm_derivable_sound interp_ok _ _ _ Hk).
       - (* Done *)
         intros q p Ht. apply done_sound; assumption.
