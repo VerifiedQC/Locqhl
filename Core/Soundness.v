@@ -8,10 +8,9 @@
     than about one class of programs.
 
     The per-rule lemmas are stated against the three-judgment system (dloc on
-    lrow, ⊢ₖ on krow, ⊢ₚ on program).  Conseq, Done, Par-Disjoint-MP,
-    Comm-Done, Aux-Subst and Branch-Accum are machine-checked, as is the
-    assembly — the induction principle and Theorem 4.1.  Comm-Select-MP and
-    Par-Comp-MP are the two open ones.
+    lrow, ⊢ₖ on krow, ⊢ₚ on program).  Every one of them is machine-checked
+    except Par-Comp-MP, as is the assembly — the induction principle and
+    Theorem 4.1.
 ** **)
 
 From Stdlib Require Import Lists.List.
@@ -129,8 +128,16 @@ Section Soundness.
     apply par_disjoint_sound; assumption.
   Qed.
 
+  (** [krow_prog] is SoundnessFacts' [kprog]; the latter had to be stated
+      upstream, where [krow_prog] does not exist yet. *)
+  Lemma krow_prog_kprog : forall k, krow_prog k = kprog k.
+  Proof. reflexivity. Qed.
+
   (** Comm-Select-MP: one rendezvous c!e ⋈ c?x behaves as x := e, and
-      same-phase independence commutes the selected pair to the front. *)
+      same-phase independence commutes the selected pair to the front
+      ([comm_reorder]).  No progress assumption is needed: the run of the
+      residual phase is BUILT from the given run by deleting the selected
+      pair, rather than assumed to exist. *)
   Lemma comm_select_sound :
     forall (Q R : assertion dim) (k kmid k' : krow)
            (c : chan) (e : expr) (x : var),
@@ -139,7 +146,29 @@ Section Soundness.
       kmid ∋ₖ c_recv c x □ k'   ->
       Σ ⊨ {{ Q }} krow_prog k' {{ R }} ->
       Σ ⊨ {{ assertion_subst Q x e }} krow_prog k {{ R }}.
-  Admitted.
+  Proof.
+    intros Q R k kmid k' c e x Hwf Hs Hr Hval
+           s r HWFr Hherm Hpsd Hh Hdef E HTerm.
+    rewrite degree_subst.
+    rewrite krow_prog_kprog in HTerm.
+    destruct HTerm as (G & Hstar & Hterm & Hcoll).
+    destruct (comm_reorder Σ _ _ Hstar Hterm k (s, r) eq_refl c e x k' Hwf
+                (ex_intro _ kmid (conj Hs Hr)))
+      as (Gt & Hstar' & Hterm' & Hcoll').
+    (* the rendezvous IS the substitution, so the premise applies at the
+       updated store *)
+    apply (Hval (s [ x |-> eval_expr (i_fn Σ) s e ]) r HWFr Hherm Hpsd).
+    - replace (classical_part (assertion_subst Q x e))
+        with (formula_subst (classical_part Q) x e) in Hh by reflexivity.
+      rewrite formula_holds_subst in Hh. exact Hh.
+    - destruct Hdef as (M & HM).
+      replace (quantum_part (assertion_subst Q x e))
+        with (qpred_subst (quantum_part Q) x e) in HM by reflexivity.
+      rewrite qpred_denote_subst in HM. exists M. exact HM.
+    - rewrite krow_prog_kprog. exists Gt.
+      split; [| split; [exact Hterm' | rewrite Hcoll'; exact Hcoll]].
+      unfold rmap in Hstar'; cbn [map] in Hstar'. exact Hstar'.
+  Qed.
 
   Lemma comm_done_sound : forall (Q : assertion dim) (k : krow),
       row_all (fun K => K = ε) k ->

@@ -2636,5 +2636,867 @@ Section SoundnessFacts.
     unfold ddenote in Hp; simpl in Hp. rewrite app_nil_r in Hp. exact Hp.
   Qed.
 
+(** ** 6. Comm-Select-MP — the combinatorics of one matched pair ********
+
+    A communication phase steps only by rendezvous, and a rendezvous is the
+    assignment x := e.  What the rule needs is that the SELECTED pair can be
+    commuted to the front of any terminating run; [wf_phase] is exactly what
+    pays for that.  This section is the syntactic half — picks/kpick against
+    the phase's action list — and §7 is the semantic half.
+*********************************************************************)
+
+  (** A pick removes exactly its action. *)
+  Lemma picks_perm : forall K a K', K ∋ a □ K' -> Permutation K (a :: K').
+  Proof.
+    intros K a K' H; induction H as [a K | a b K K' H IH]; simpl.
+    - apply Permutation_refl.
+    - eapply Permutation_trans; [apply perm_skip, IH | apply perm_swap].
+  Qed.
+
+  (** The action list splits along the row, and reduces at a leaf.  Kept as
+      lemmas rather than [unfold]ed: an unfolded [row_flat] no longer matches
+      the folded [krow_actions] of the other hypotheses, and [lia] then fails
+      on what look like two different terms. *)
+  Lemma krow_actions_leaf : forall K, krow_actions (leaf K) = K.
+  Proof. reflexivity. Qed.
+
+  Lemma krow_actions_par : forall k1 k2,
+      krow_actions (par k1 k2) = krow_actions k1 ++ krow_actions k2.
+  Proof. reflexivity. Qed.
+
+  Lemma kpick_perm : forall k a k',
+      k ∋ₖ a □ k' -> Permutation (krow_actions k) (a :: krow_actions k').
+  Proof.
+    intros k a k' H;
+      induction H as [K a K' Hp | k1 k1' k2 a H IH | k1 k2 k2' a H IH];
+      unfold krow_actions in *; cbn [row_flat].
+    - apply picks_perm, Hp.
+    - eapply Permutation_trans; [apply Permutation_app_tail, IH | ].
+      apply Permutation_refl.
+    - eapply Permutation_trans; [apply Permutation_app_head, IH | ].
+      apply Permutation_sym, Permutation_middle.
+  Qed.
+
+  Lemma krow_endpoints_perm : forall k a k' c,
+      k ∋ₖ a □ k' -> caction_chan a = c ->
+      Permutation (krow_endpoints k c) (a :: krow_endpoints k' c).
+  Proof.
+    intros k a k' c Hp Hc. unfold krow_endpoints.
+    eapply Permutation_trans.
+    - apply (permutation_filter _ (fun b => Nat.eqb (caction_chan b) c)).
+      apply kpick_perm, Hp.
+    - cbn. rewrite Hc, Nat.eqb_refl. apply Permutation_refl.
+  Qed.
+
+  Lemma krow_endpoints_par : forall k1 k2 c,
+      krow_endpoints (par k1 k2) c
+      = krow_endpoints k1 c ++ krow_endpoints k2 c.
+  Proof.
+    intros; unfold krow_endpoints, krow_actions; cbn [row_flat].
+    apply filter_app.
+  Qed.
+
+  Lemma krow_chan_actions : forall k,
+      krow_chan k = map caction_chan (krow_actions k).
+  Proof.
+    unfold krow_chan, krow_actions.
+    induction k as [K | k1 IH1 k2 IH2]; cbn [row_flat].
+    - reflexivity.
+    - rewrite map_app, IH1, IH2; reflexivity.
+  Qed.
+
+  Lemma krow_endpoints_in_chan : forall k c a,
+      In a (krow_endpoints k c) -> In c (krow_chan k).
+  Proof.
+    intros k c a Hin. unfold krow_endpoints in Hin.
+    apply filter_In in Hin as [Hin Hc]. apply Nat.eqb_eq in Hc.
+    rewrite krow_chan_actions, <- Hc. apply in_map, Hin.
+  Qed.
+
+  Lemma krow_endpoints_nil_parties : forall k c,
+      krow_endpoints k c = [] -> row_parties cblock_chan k c = 0%nat.
+  Proof.
+    intros k c; induction k as [K | k1 IH1 k2 IH2]; cbn [row_parties].
+    - unfold krow_endpoints, krow_actions; cbn [row_flat]; intro Hnil.
+      destruct (existsb (Nat.eqb c) (cblock_chan K)) eqn:Ex; [| reflexivity].
+      exfalso. apply existsb_exists in Ex as (c0 & Hin & Heq).
+      apply Nat.eqb_eq in Heq; subst c0.
+      unfold cblock_chan in Hin. apply in_map_iff in Hin as (a & Ha & HaK).
+      assert (Hmem : In a (filter (fun b => Nat.eqb (caction_chan b) c) K)).
+      { apply filter_In; split; [exact HaK | apply Nat.eqb_eq, Ha]. }
+      rewrite Hnil in Hmem; exact Hmem.
+    - rewrite krow_endpoints_par. intro Hnil.
+      apply app_eq_nil in Hnil as [H1 H2].
+      rewrite (IH1 H1), (IH2 H2); reflexivity.
+  Qed.
+
+  Lemma krow_endpoints_nil_notin : forall k c,
+      krow_endpoints k c = [] -> ~ In c (krow_chan k).
+  Proof.
+    intros k c Hnil Hin.
+    rewrite krow_chan_actions in Hin.
+    apply in_map_iff in Hin as (a & Ha & HaIn).
+    assert (Hmem : In a (krow_endpoints k c)).
+    { unfold krow_endpoints. apply filter_In; split;
+        [exact HaIn | apply Nat.eqb_eq, Ha]. }
+    rewrite Hnil in Hmem; exact Hmem.
+  Qed.
+
+  (** What [wf_phase] says about the selected channel: two endpoints, in two
+      distinct leaves.  The second half is what forbids a rendezvous with
+      oneself, which [kpick] twice does not by itself rule out. *)
+  Definition chan_pair (k : krow) (c : chan) : Prop :=
+    length (krow_endpoints k c) = 2%nat /\ row_parties cblock_chan k c = 2%nat.
+
+  Lemma wf_kchannels_chan_pair : forall k c,
+      wf_kchannels k -> In c (krow_chan k) -> chan_pair k c.
+  Proof.
+    intros k c Hwf Hin.
+    destruct (Hwf c Hin) as (Hs & Hr & Hp).
+    split; [| exact Hp].
+    rewrite (filter_length_split is_send (krow_endpoints k c)), Hs, Hr.
+    reflexivity.
+  Qed.
+
+  Lemma wf_phase_chan_pair : forall k kmid c e,
+      wf_phase k -> k ∋ₖ c_send c e □ kmid -> chan_pair k c.
+  Proof.
+    intros k kmid c e (Hwf & _ & _) Hpick.
+    apply (wf_kchannels_chan_pair _ _ Hwf).
+    apply (krow_endpoints_in_chan k c (c_send c e)).
+    pose proof (krow_endpoints_perm _ _ _ c Hpick eq_refl) as Hperm.
+    apply Permutation_sym in Hperm.
+    eapply Permutation_in; [exact Hperm | left; reflexivity].
+  Qed.
+
+  (** Picking an action removes exactly it from every footprint. *)
+  Lemma kpick_recv_perm : forall k a k',
+      k ∋ₖ a □ k' ->
+      Permutation (phase_recv k) (caction_change a ++ phase_recv k').
+  Proof.
+    intros k a k' H. unfold phase_recv.
+    exact (permutation_flat_map _ _ caction_change _ _ (kpick_perm _ _ _ H)).
+  Qed.
+
+  Lemma kpick_oread_perm : forall k a k',
+      k ∋ₖ a □ k' ->
+      Permutation (phase_oread k) (caction_read a ++ phase_oread k').
+  Proof.
+    intros k a k' H. unfold phase_oread.
+    exact (permutation_flat_map _ _ caction_read _ _ (kpick_perm _ _ _ H)).
+  Qed.
+
+  (** Off the picked channel, endpoints and party counts are untouched. *)
+  Lemma kpick_endpoints_other : forall k a k' c,
+      k ∋ₖ a □ k' -> caction_chan a <> c ->
+      Permutation (krow_endpoints k c) (krow_endpoints k' c).
+  Proof.
+    intros k a k' c H Hne. unfold krow_endpoints.
+    eapply Permutation_trans.
+    - apply (permutation_filter _ (fun b => Nat.eqb (caction_chan b) c)).
+      apply kpick_perm, H.
+    - cbn. destruct (Nat.eqb (caction_chan a) c) eqn:Ec.
+      + apply Nat.eqb_eq in Ec; contradiction.
+      + apply Permutation_refl.
+  Qed.
+
+  Lemma kpick_parties_other : forall k a k' c,
+      k ∋ₖ a □ k' -> caction_chan a <> c ->
+      row_parties cblock_chan k' c = row_parties cblock_chan k c.
+  Proof.
+    intros k a k' c H Hne;
+      induction H as [K a K' Hp | kA kA' kB a H IH | kA kB kB' a H IH];
+      cbn [row_parties].
+    - assert (Hperm : Permutation (cblock_chan K)
+                        (caction_chan a :: cblock_chan K')).
+      { unfold cblock_chan. rewrite <- map_cons.
+        apply Permutation_map, picks_perm, Hp. }
+      destruct (existsb (Nat.eqb c) (cblock_chan K)) eqn:E1;
+        destruct (existsb (Nat.eqb c) (cblock_chan K')) eqn:E2;
+        try reflexivity; exfalso.
+      + apply existsb_exists in E1 as (c0 & Hin & Heq).
+        apply Nat.eqb_eq in Heq; subst c0.
+        eapply Permutation_in in Hin; [| exact Hperm].
+        destruct Hin as [Heq | Hin]; [contradiction |].
+        assert (Htrue : existsb (Nat.eqb c) (cblock_chan K') = true)
+          by (apply existsb_exists; exists c;
+              split; [exact Hin | apply Nat.eqb_refl]).
+        rewrite E2 in Htrue; discriminate.
+      + apply existsb_exists in E2 as (c0 & Hin & Heq).
+        apply Nat.eqb_eq in Heq; subst c0.
+        assert (HinK : In c (cblock_chan K)).
+        { eapply Permutation_in; [apply Permutation_sym, Hperm | right; exact Hin]. }
+        assert (Htrue : existsb (Nat.eqb c) (cblock_chan K) = true)
+          by (apply existsb_exists; exists c;
+              split; [exact HinK | apply Nat.eqb_refl]).
+        rewrite E1 in Htrue; discriminate.
+    - rewrite IH; [reflexivity | exact Hne].
+    - rewrite IH; [reflexivity | exact Hne].
+  Qed.
+
+  (** [wf_phase] survives consuming one matched PAIR — not one endpoint:
+      after a single [kpick] the channel carries one endpoint, and
+      [wf_kchannels] would already be false. *)
+  Lemma wf_phase_pair : forall k c e x kmid k',
+      wf_phase k ->
+      k    ∋ₖ c_send c e □ kmid ->
+      kmid ∋ₖ c_recv c x □ k' ->
+      wf_phase k'.
+  Proof.
+    intros k c e x kmid k' (Hch & Hnd & Hdj) H1 H2.
+    pose proof (kpick_recv_perm _ _ _ H1) as R1.
+    pose proof (kpick_recv_perm _ _ _ H2) as R2.
+    pose proof (kpick_oread_perm _ _ _ H1) as O1.
+    pose proof (kpick_oread_perm _ _ _ H2) as O2.
+    cbn [caction_change caction_read app] in R1, R2, O1, O2.
+    assert (Hnd' : NoDup (phase_recv k')).
+    { rewrite R1 in Hnd. rewrite R2 in Hnd. cbn in Hnd.
+      inversion Hnd; assumption. }
+    assert (Hdj' : disjoint (phase_recv k') (phase_oread k')).
+    { intros y Hy Hy'.
+      assert (Hy1 : In y (phase_recv k)).
+      { eapply Permutation_in; [apply Permutation_sym, R1 |].
+        eapply Permutation_in; [apply Permutation_sym, R2 | cbn; right; exact Hy]. }
+      assert (Hy2 : In y (phase_oread k)).
+      { eapply Permutation_in; [apply Permutation_sym, O1 |].
+        cbn. apply in_or_app. right.
+        eapply Permutation_in; [apply Permutation_sym, O2 | cbn; exact Hy']. }
+      exact (Hdj y Hy1 Hy2). }
+    split; [| split; assumption].
+    intros c0 Hin0.
+    assert (Hc0 : c0 <> c).
+    { intro; subst c0.
+      apply (krow_endpoints_nil_notin k' c); [| exact Hin0].
+      pose proof (krow_endpoints_perm _ _ _ c H1 eq_refl) as P1.
+      pose proof (krow_endpoints_perm _ _ _ c H2 eq_refl) as P2.
+      assert (Hinc : In c (krow_chan k)).
+      { apply (krow_endpoints_in_chan k c (c_send c e)).
+        eapply Permutation_in; [apply Permutation_sym, P1 | left; reflexivity]. }
+      destruct (Hch c Hinc) as (Hs & Hr & _).
+      pose proof (filter_length_split is_send (krow_endpoints k c)) as Hsplit.
+      rewrite Hs, Hr in Hsplit.
+      apply Permutation_length in P1, P2. cbn in P1, P2.
+      destruct (krow_endpoints k' c); [reflexivity | cbn in *; lia]. }
+    assert (Hne1 : caction_chan (c_send c e) <> c0) by (cbn; congruence).
+    assert (Hne2 : caction_chan (c_recv c x) <> c0) by (cbn; congruence).
+    pose proof (kpick_endpoints_other _ _ _ _ H1 Hne1) as E1.
+    pose proof (kpick_endpoints_other _ _ _ _ H2 Hne2) as E2.
+    assert (Hin : In c0 (krow_chan k)).
+    { rewrite krow_chan_actions in Hin0 |- *.
+      apply in_map_iff in Hin0 as (a0 & Ha0 & Hmem).
+      apply in_map_iff. exists a0. split; [exact Ha0 |].
+      eapply Permutation_in; [apply Permutation_sym, (kpick_perm _ _ _ H1) |].
+      right.
+      eapply Permutation_in; [apply Permutation_sym, (kpick_perm _ _ _ H2) |].
+      right. exact Hmem. }
+    destruct (Hch c0 Hin) as (Hs & Hr & Hp).
+    split; [| split].
+    - pose proof (Permutation_length (permutation_filter _ is_send _ _ E1)) as L1.
+      pose proof (Permutation_length (permutation_filter _ is_send _ _ E2)) as L2.
+      congruence.
+    - pose proof (Permutation_length
+                    (permutation_filter _ (fun a => negb (is_send a)) _ _ E1)) as L1.
+      pose proof (Permutation_length
+                    (permutation_filter _ (fun a => negb (is_send a)) _ _ E2)) as L2.
+      congruence.
+    - rewrite (kpick_parties_other _ _ _ _ H2 Hne2).
+      rewrite (kpick_parties_other _ _ _ _ H1 Hne1). exact Hp.
+  Qed.
+
+  (** ** 6b. Occurrence uniqueness.
+
+      [wf_kchannels] gives ONE send and ONE receive on the selected channel,
+      so any two ways of picking them coincide — which is what identifies the
+      pair the scheduler consumes with the pair the rule selected. *)
+
+  Definition ends_on (p : caction -> bool) (l : list caction) (c : chan)
+    : list caction :=
+    filter p (filter (fun a => Nat.eqb (caction_chan a) c) l).
+
+  Lemma ends_on_cons : forall p a l c,
+      ends_on p (a :: l) c
+      = if andb (Nat.eqb (caction_chan a) c) (p a)
+        then a :: ends_on p l c else ends_on p l c.
+  Proof.
+    intros p a l c; unfold ends_on; cbn.
+    destruct (Nat.eqb (caction_chan a) c); cbn;
+      [destruct (p a); cbn; reflexivity | reflexivity].
+  Qed.
+
+  Lemma ends_on_app : forall p l1 l2 c,
+      ends_on p (l1 ++ l2) c = ends_on p l1 c ++ ends_on p l2 c.
+  Proof.
+    intros; unfold ends_on; rewrite !filter_app; reflexivity.
+  Qed.
+
+  Lemma ends_on_endpoints : forall p k c,
+      ends_on p (krow_actions k) c = filter p (krow_endpoints k c).
+  Proof. reflexivity. Qed.
+
+  Lemma ends_on_ge1 : forall p l c a,
+      In a l -> caction_chan a = c -> p a = true ->
+      (1 <= length (ends_on p l c))%nat.
+  Proof.
+    intros p l c a Hin Hc Hp.
+    assert (Hmem : In a (ends_on p l c)).
+    { unfold ends_on; apply filter_In; split; [| exact Hp].
+      apply filter_In; split; [exact Hin | apply Nat.eqb_eq, Hc]. }
+    destruct (ends_on p l c); [contradiction | cbn; lia].
+  Qed.
+
+  (* The channel is written [caction_chan a1] rather than bound to a variable
+     c: with a hypothesis [caction_chan a1 = c] in scope, [subst] treats c as
+     the defined side and eliminates it, taking the hypothesis with it. *)
+  Lemma picks_unique : forall p K a1 K1,
+      K ∋ a1 □ K1 ->
+      forall a2 K2,
+        length (ends_on p K (caction_chan a1)) = 1%nat ->
+        p a1 = true -> p a2 = true ->
+        caction_chan a1 = caction_chan a2 ->
+        K ∋ a2 □ K2 -> a1 = a2 /\ K1 = K2.
+  Proof.
+    intros p K a1 K1 H1.
+    induction H1 as [a K0 | a b K0 K0' H1 IH];
+      intros a2 K2 Hlen Hp1 Hp2 Hc H2.
+    - inversion H2 as [| ax bx Kx Kx' H2' Eq1 Eq2]; subst.
+      + split; reflexivity.
+      + exfalso.
+        rewrite ends_on_cons, Nat.eqb_refl, Hp1 in Hlen; cbn in Hlen.
+        assert (1 <= length (ends_on p K0 (caction_chan a)))%nat
+          by (eapply ends_on_ge1;
+              [apply (picks_in _ _ _ H2') | symmetry; exact Hc | exact Hp2]).
+        lia.
+    - assert (Hb : andb (Nat.eqb (caction_chan b) (caction_chan a))
+                        (p b) = false).
+      { destruct (andb (Nat.eqb (caction_chan b) (caction_chan a)) (p b)) eqn:Eb;
+          [| reflexivity]. exfalso.
+        rewrite ends_on_cons, Eb in Hlen; cbn in Hlen.
+        assert (1 <= length (ends_on p K0 (caction_chan a)))%nat
+          by (eapply ends_on_ge1;
+              [apply (picks_in _ _ _ H1) | reflexivity | exact Hp1]).
+        lia. }
+      rewrite ends_on_cons, Hb in Hlen.
+      inversion H2 as [| ax bx Kx Kx' H2' Eq1 Eq2]; subst.
+      + exfalso. rewrite <- Hc, Nat.eqb_refl, Hp2 in Hb; cbn in Hb; discriminate.
+      + destruct (IH _ _ Hlen Hp1 Hp2 Hc H2') as [Ha HK].
+        split; [exact Ha | rewrite HK; reflexivity].
+  Qed.
+
+  Lemma kpick_ends_ge1 : forall p k a k' c,
+      k ∋ₖ a □ k' -> caction_chan a = c -> p a = true ->
+      (1 <= length (ends_on p (krow_actions k) c))%nat.
+  Proof.
+    intros p k a k' c H Hc Hp.
+    eapply ends_on_ge1; [| exact Hc | exact Hp].
+    eapply Permutation_in; [apply Permutation_sym, (kpick_perm _ _ _ H) |].
+    left; reflexivity.
+  Qed.
+
+  Lemma kpick_unique : forall p k a1 k1,
+      k ∋ₖ a1 □ k1 ->
+      forall a2 k2,
+        length (ends_on p (krow_actions k) (caction_chan a1)) = 1%nat ->
+        p a1 = true -> p a2 = true ->
+        caction_chan a1 = caction_chan a2 ->
+        k ∋ₖ a2 □ k2 -> a1 = a2 /\ k1 = k2.
+  Proof.
+    intros p k a1 k1 H1.
+    induction H1 as [K a K' Hpk | kA kA' kB a H1 IH | kA kB kB' a H1 IH];
+      intros a2 k2 Hlen Hp1 Hp2 Hc H2.
+    - inversion H2 as [Kx ax Kx' Hpk2 Eq1 Eq2 | |]; subst.
+      rewrite krow_actions_leaf in Hlen.
+      destruct (picks_unique _ _ _ _ Hpk _ _ Hlen Hp1 Hp2 Hc Hpk2)
+        as [Ha HK]; subst.
+      split; reflexivity.
+    - rewrite krow_actions_par, ends_on_app, length_app in Hlen.
+      inversion H2 as [| kX kX' kY ax H2' Eq1 Eq2 | kX kY kY' ax H2' Eq1 Eq2]; subst.
+      + pose proof (kpick_ends_ge1 p _ _ _ _ H1 eq_refl Hp1) as G1.
+        assert (Hl : length (ends_on p (krow_actions kA) (caction_chan a)) = 1%nat)
+          by lia.
+        destruct (IH _ _ Hl Hp1 Hp2 Hc H2') as [Ha Hk]; subst.
+        split; reflexivity.
+      + exfalso.
+        pose proof (kpick_ends_ge1 p _ _ _ _ H1 eq_refl Hp1) as G1.
+        pose proof (kpick_ends_ge1 p _ _ _ _ H2' (eq_sym Hc) Hp2) as G2.
+        lia.
+    - rewrite krow_actions_par, ends_on_app, length_app in Hlen.
+      inversion H2 as [| kX kX' kY ax H2' Eq1 Eq2 | kX kY kY' ax H2' Eq1 Eq2]; subst.
+      + exfalso.
+        pose proof (kpick_ends_ge1 p _ _ _ _ H1 eq_refl Hp1) as G1.
+        pose proof (kpick_ends_ge1 p _ _ _ _ H2' (eq_sym Hc) Hp2) as G2.
+        lia.
+      + pose proof (kpick_ends_ge1 p _ _ _ _ H1 eq_refl Hp1) as G1.
+        assert (Hl : length (ends_on p (krow_actions kB) (caction_chan a)) = 1%nat)
+          by lia.
+        destruct (IH _ _ Hl Hp1 Hp2 Hc H2') as [Ha Hk]; subst.
+        split; reflexivity.
+  Qed.
+
+  Lemma comm_pair_unique : forall k c e x kmid k' e0 x0 kmid0 k0,
+      wf_phase k ->
+      k     ∋ₖ c_send c e  □ kmid  -> kmid  ∋ₖ c_recv c x  □ k' ->
+      k     ∋ₖ c_send c e0 □ kmid0 -> kmid0 ∋ₖ c_recv c x0 □ k0 ->
+      e = e0 /\ x = x0 /\ k' = k0.
+  Proof.
+    intros k c e x kmid k' e0 x0 kmid0 k0 Hwf Hs1 Hr1 Hs2 Hr2.
+    destruct Hwf as (Hch & _ & _).
+    assert (Hin : In c (krow_chan k)).
+    { apply (krow_endpoints_in_chan k c (c_send c e)).
+      eapply Permutation_in;
+        [apply Permutation_sym, (krow_endpoints_perm _ _ _ c Hs1 eq_refl) |].
+      left; reflexivity. }
+    destruct (Hch c Hin) as (Hsend & Hrecv & _).
+    destruct (kpick_unique is_send k _ _ Hs1 (c_send c e0) kmid0
+                Hsend eq_refl eq_refl eq_refl Hs2) as [Hae Hmid].
+    injection Hae as He. subst e0. subst kmid0.
+    assert (Hrecv' : length (ends_on (fun a => negb (is_send a))
+                               (krow_actions kmid) c) = 1%nat).
+    { rewrite ends_on_endpoints.
+      pose proof (krow_endpoints_perm _ _ _ c Hs1 eq_refl) as P1.
+      pose proof (Permutation_length
+                    (permutation_filter _ (fun a => negb (is_send a)) _ _ P1)) as L.
+      cbn in L. lia. }
+    destruct (kpick_unique (fun a => negb (is_send a)) kmid _ _ Hr1
+                (c_recv c x0) k0
+                Hrecv' eq_refl eq_refl eq_refl Hr2) as [Hax Hk].
+    injection Hax as Hx. subst x0.
+    split; [reflexivity | split; [reflexivity | exact Hk]].
+  Qed.
+
+  (** ** 6c. Confluence.  The two pairs FORK from the same row (the scheduler
+      took one, the rule selected the other), so what is needed is that they
+      can be joined — not that two consecutive picks can be swapped. *)
+
+  Lemma picks_confluent : forall K a K1,
+      K ∋ a □ K1 ->
+      forall b K2, K ∋ b □ K2 ->
+        caction_chan a <> caction_chan b ->
+        exists K12, K1 ∋ b □ K12 /\ K2 ∋ a □ K12.
+  Proof.
+    intros K a K1 H1.
+    induction H1 as [a K0 | a b0 K0 K0' H1 IH]; intros b K2 H2 Hne.
+    - inversion H2 as [| ax bx Kx Kx' H2' Eq1 Eq2]; subst.
+      + exfalso; apply Hne; reflexivity.
+      + exists Kx'. split; [exact H2' | apply pick_here].
+    - inversion H2 as [| ax bx Kx Kx' H2' Eq1 Eq2]; subst.
+      + exists K0'. split; [apply pick_here | exact H1].
+      + destruct (IH _ _ H2' Hne) as (K12 & Hb & Ha).
+        exists (b0 :: K12). split; apply pick_there; assumption.
+  Qed.
+
+  Lemma kpick_confluent : forall k a k1,
+      k ∋ₖ a □ k1 ->
+      forall b k2, k ∋ₖ b □ k2 ->
+        caction_chan a <> caction_chan b ->
+        exists k12, k1 ∋ₖ b □ k12 /\ k2 ∋ₖ a □ k12.
+  Proof.
+    intros k a k1 H1.
+    induction H1 as [K a K' Hpk | kA kA' kB a H1 IH | kA kB kB' a H1 IH];
+      intros b k2 H2 Hne.
+    - inversion H2 as [Kx bx Kx' Hpk2 Eq1 Eq2 | |]; subst.
+      destruct (picks_confluent _ _ _ Hpk _ _ Hpk2 Hne) as (K12 & Hb & Ha).
+      exists (leaf K12). split; apply kp_here; assumption.
+    - inversion H2 as [| kX kX' kY bx H2' Eq1 Eq2 | kX kY kY' bx H2' Eq1 Eq2]; subst.
+      + destruct (IH _ _ H2' Hne) as (k12 & Hb & Ha).
+        exists (par k12 kB). split; apply kp_left; assumption.
+      + exists (par kA' kY').
+        split; [apply kp_right, H2' | apply kp_left, H1].
+    - inversion H2 as [| kX kX' kY bx H2' Eq1 Eq2 | kX kY kY' bx H2' Eq1 Eq2]; subst.
+      + exists (par kX' kB').
+        split; [apply kp_left, H2' | apply kp_right, H1].
+      + destruct (IH _ _ H2' Hne) as (k12 & Hb & Ha).
+        exists (par kA k12). split; apply kp_right; assumption.
+  Qed.
+
+  (** One matched pair, as a relation on rows. *)
+  Definition kpair (k : krow) (c : chan) (e : expr) (x : var) (k' : krow)
+    : Prop :=
+    exists kmid, k ∋ₖ c_send c e □ kmid /\ kmid ∋ₖ c_recv c x □ k'.
+
+  Lemma kpair_confluent : forall k c1 e1 x1 k1 c2 e2 x2 k2,
+      c1 <> c2 ->
+      kpair k c1 e1 x1 k1 -> kpair k c2 e2 x2 k2 ->
+      exists k12, kpair k1 c2 e2 x2 k12 /\ kpair k2 c1 e1 x1 k12.
+  Proof.
+    intros k c1 e1 x1 k1 c2 e2 x2 k2 Hc (m1 & Hs1 & Hr1) (m2 & Hs2 & Hr2).
+    assert (N12 : c1 <> c2) by exact Hc.
+    assert (N21 : c2 <> c1) by (intro; apply Hc; symmetry; assumption).
+    destruct (kpick_confluent _ _ _ Hs1 _ _ Hs2 N12) as (n & Hn1 & Hn2).
+    destruct (kpick_confluent _ _ _ Hr1 _ _ Hn1 N12) as (p & Hp1 & Hp2).
+    destruct (kpick_confluent _ _ _ Hr2 _ _ Hn2 N21) as (q & Hq1 & Hq2).
+    destruct (kpick_confluent _ _ _ Hp2 _ _ Hq2 N12) as (k12 & Hk1 & Hk2).
+    exists k12. split.
+    - exists p. split; [exact Hp1 | exact Hk1].
+    - exists q. split; [exact Hq1 | exact Hk2].
+  Qed.
+
+  Lemma kpair_actions_perm : forall k c e x k',
+      kpair k c e x k' ->
+      Permutation (krow_actions k)
+                  (c_send c e :: c_recv c x :: krow_actions k').
+  Proof.
+    intros k c e x k' (kmid & Hs & Hr).
+    eapply Permutation_trans; [apply (kpick_perm _ _ _ Hs) |].
+    apply perm_skip, (kpick_perm _ _ _ Hr).
+  Qed.
+
+  (** ** 6d. The store half: two rendezvous on different channels commute. *)
+
+  Lemma rendezvous_store_comm : forall fn (s : store) x1 e1 x2 e2,
+      x1 <> x2 ->
+      ~ In x1 (expr_vars e2) -> ~ In x2 (expr_vars e1) ->
+      (s [ x1 |-> eval_expr fn s e1 ])
+        [ x2 |-> eval_expr fn (s [ x1 |-> eval_expr fn s e1 ]) e2 ]
+      = (s [ x2 |-> eval_expr fn s e2 ])
+          [ x1 |-> eval_expr fn (s [ x2 |-> eval_expr fn s e2 ]) e1 ].
+  Proof.
+    intros fn s x1 e1 x2 e2 Hx H12 H21.
+    rewrite (eval_expr_update_notin fn s x1 _ e2 H12).
+    rewrite (eval_expr_update_notin fn s x2 _ e1 H21).
+    apply store_update_comm, Hx.
+  Qed.
+
+  (** …and [wf_phase]'s last two clauses are exactly its side conditions. *)
+  Lemma two_pairs_indep : forall k c0 e0 x0 k1 c e x k12,
+      wf_phase k ->
+      kpair k c0 e0 x0 k1 -> kpair k1 c e x k12 ->
+      x <> x0 /\ ~ In x (expr_vars e0) /\ ~ In x0 (expr_vars e).
+  Proof.
+    intros k c0 e0 x0 k1 c e x k12 (_ & Hnd & Hdj) Hp0 Hp1.
+    pose proof (kpair_actions_perm _ _ _ _ _ Hp0) as Q0.
+    pose proof (kpair_actions_perm _ _ _ _ _ Hp1) as Q1.
+    assert (Q : Permutation (krow_actions k)
+                  (c_send c0 e0 :: c_recv c0 x0 ::
+                   c_send c e :: c_recv c x :: krow_actions k12)).
+    { eapply Permutation_trans; [exact Q0 |].
+      apply perm_skip, perm_skip, Q1. }
+    assert (HR : Permutation (phase_recv k) (x0 :: x :: phase_recv k12)).
+    { unfold phase_recv.
+      exact (permutation_flat_map _ _ caction_change _ _ Q). }
+    assert (HO : Permutation (phase_oread k)
+                   (expr_vars e0 ++ expr_vars e ++ phase_oread k12)).
+    { unfold phase_oread.
+      eapply Permutation_trans;
+        [exact (permutation_flat_map _ _ caction_read _ _ Q) |].
+      cbn [flat_map caction_read]. apply Permutation_refl. }
+    assert (Hnd' : NoDup (x0 :: x :: phase_recv k12))
+      by (eapply Permutation_NoDup; [exact HR | exact Hnd]).
+    inversion Hnd' as [| y ys Hy Hnd'' ]; subst.
+    split; [| split].
+    - intro Hxx; subst x0. apply Hy; left; reflexivity.
+    - intro Hin. apply (Hdj x).
+      + eapply Permutation_in; [apply Permutation_sym, HR |].
+        right; left; reflexivity.
+      + eapply Permutation_in; [apply Permutation_sym, HO |].
+        apply in_or_app; left; exact Hin.
+    - intro Hin. apply (Hdj x0).
+      + eapply Permutation_in; [apply Permutation_sym, HR |].
+        left; reflexivity.
+      + eapply Permutation_in; [apply Permutation_sym, HO |].
+        apply in_or_app; right; apply in_or_app; left; exact Hin.
+  Qed.
+
+(** ** 7. Comm-Select-MP — the semantic half ***************************
+
+    A communication phase runs as a program whose leaves are [advance ↓ K ↓].
+    Such a program can ONLY step by rendezvous, its configuration stays a
+    single component over a single state, and — by §6 — the selected pair can
+    be commuted to the front of any terminating run.
+*********************************************************************)
+
+  (** The K-row read as a program.  Same body as [Soundness.krow_prog], which
+      cannot be used here: it is defined downstream.  The two are convertible,
+      and Soundness.v bridges them by [reflexivity]. *)
+  Definition kprog (k : krow) : program :=
+    row_map (fun K => advance r_done K terminated) k.
+
+  Lemma kprog_leaf_inv : forall k T,
+      kprog k = leaf T -> exists K, k = leaf K /\ T = advance r_done K terminated.
+  Proof.
+    intros [K | k1 k2] T H; unfold kprog in H; cbn [row_map] in H.
+    - injection H as HT. exists K. split; [reflexivity | symmetry; exact HT].
+    - discriminate.
+  Qed.
+
+  Lemma kprog_par_inv : forall k P1 P2,
+      kprog k = par P1 P2 ->
+      exists k1 k2, k = par k1 k2 /\ P1 = kprog k1 /\ P2 = kprog k2.
+  Proof.
+    intros [K | k1 k2] P1 P2 H; unfold kprog in H; cbn [row_map] in H.
+    - discriminate.
+    - injection H as H1 H2. exists k1, k2.
+      split; [reflexivity | split; symmetry; assumption].
+  Qed.
+
+  Lemma kpick_not_terminated : forall k a k',
+      k ∋ₖ a □ k' -> ~ prog_terminated (kprog k).
+  Proof.
+    intros k a k' H;
+      induction H as [K a K' Hp | kA kA' kB a H IH | kA kB kB' a H IH];
+      unfold prog_terminated, kprog in *; cbn [row_map row_all].
+    - destruct K as [| a0 K0]; [inversion Hp |]. cbn [advance]. discriminate.
+    - intros [H1 _]; exact (IH H1).
+    - intros [_ H2]; exact (IH H2).
+  Qed.
+
+  (** [kpick] and [replace_leaf] are the same selection, one on the row and
+      one on the program. *)
+  Lemma kpick_replace : forall k a k',
+      k ∋ₖ a □ k' ->
+      exists K K', K ∋ a □ K' /\
+        replace_leaf (phase r_done K terminated)
+                     (advance r_done K' terminated) (kprog k) (kprog k').
+  Proof.
+    intros k a k' H;
+      induction H as [K a K' Hp | k1 k1' k2 a H IH | k1 k2 k2' a H IH].
+    - exists K, K'. split; [exact Hp |].
+      unfold kprog; cbn [row_map].
+      destruct K as [| a0 K0]; [inversion Hp |].
+      cbn [advance]. apply rl_here.
+    - destruct IH as (K & K' & Hp & Hr).
+      exists K, K'. split; [exact Hp |].
+      unfold kprog in *; cbn [row_map]. apply rl_left, Hr.
+    - destruct IH as (K & K' & Hp & Hr).
+      exists K, K'. split; [exact Hp |].
+      unfold kprog in *; cbn [row_map]. apply rl_right, Hr.
+  Qed.
+
+  Lemma replace_kpick : forall k K K' T a P',
+      K ∋ a □ K' ->
+      replace_leaf (phase r_done K T)
+                   (advance r_done K' T) (kprog k) P' ->
+      exists k'', k ∋ₖ a □ k'' /\ P' = kprog k''.
+  Proof.
+    intros k K K' T a P' Hp Hr.
+    remember (kprog k) as P eqn:HP. revert k HP.
+    induction Hr as [| P Q R Hr IH | P Q R Hr IH]; intros k HP.
+    - (* a kprog leaf forces the continuation to be ↓ *)
+      symmetry in HP. apply kprog_leaf_inv in HP as (K0 & Hk & HT).
+      destruct K0 as [| a0 K0]; cbn [advance] in HT; [discriminate |].
+      inversion HT; subst.
+      exists (leaf K'). split; [| reflexivity].
+      apply kp_here. exact Hp.
+    - symmetry in HP. apply kprog_par_inv in HP as (k1 & k2 & Hk & H1 & H2).
+      subst k. destruct (IH k1 H1) as (k1'' & Hpk & HP').
+      exists (par k1'' k2). split; [apply kp_left, Hpk |].
+      rewrite HP', H2. unfold kprog; cbn [row_map]. reflexivity.
+    - symmetry in HP. apply kprog_par_inv in HP as (k1 & k2 & Hk & H1 & H2).
+      subst k. destruct (IH k2 H2) as (k2'' & Hpk & HP').
+      exists (par k1 k2''). split; [apply kp_right, Hpk |].
+      rewrite HP', H1. unfold kprog; cbn [row_map]. reflexivity.
+  Qed.
+
+  (** Every step of a communication-only row is a rendezvous, and lands on
+      another communication-only row.  [ds_local] is impossible: a kprog leaf
+      has residual ↓. *)
+  Lemma kprog_step_inv : forall k E G,
+      Σ ⊳ ‹ kprog k, E › ⇝ G ->
+      exists c e x kmid k',
+        k ∋ₖ c_send c e □ kmid /\ kmid ∋ₖ c_recv c x □ k' /\
+        G = {|| kprog k',
+               map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E ||}.
+  Proof.
+    intros k E G Hstep.
+    remember (kprog k) as P eqn:HP. revert k HP.
+    induction Hstep as
+      [ L K T E0 Gl Hloc
+      | P1 P2 E0 G1 Hs IH
+      | P1 P2 E0 G2 Hs IH
+      | P1 P1' P2 P2' Ks Ks' Kr Kr' Ts Tr c e x E0 HpS HpR HrS HrR
+      | P1 P1' P2 P2' Ks Ks' Kr Kr' Ts Tr c e x E0 HpS HpR HrS HrR ];
+      intros k HP.
+    - exfalso. symmetry in HP. apply kprog_leaf_inv in HP as (K0 & _ & HT).
+      destruct K0; cbn [advance] in HT; discriminate.
+    - symmetry in HP. apply kprog_par_inv in HP as (k1 & k2 & Hk & H1 & H2).
+      subst k. destruct (IH k1 H1) as (c & e & x & kmid & k' & Hs1 & Hs2 & HG).
+      exists c, e, x, (par kmid k2), (par k' k2).
+      split; [apply kp_left, Hs1 | split; [apply kp_left, Hs2 |]].
+      subst G1. cbn [map fst snd]. rewrite H2.
+      unfold kprog; cbn [row_map]. reflexivity.
+    - symmetry in HP. apply kprog_par_inv in HP as (k1 & k2 & Hk & H1 & H2).
+      subst k. destruct (IH k2 H2) as (c & e & x & kmid & k' & Hs1 & Hs2 & HG).
+      exists c, e, x, (par k1 kmid), (par k1 k').
+      split; [apply kp_right, Hs1 | split; [apply kp_right, Hs2 |]].
+      subst G2. cbn [map fst snd]. rewrite H1.
+      unfold kprog; cbn [row_map]. reflexivity.
+    - symmetry in HP. apply kprog_par_inv in HP as (k1 & k2 & Hk & H1 & H2).
+      subst k. rewrite H1 in HrS. rewrite H2 in HrR.
+      destruct (replace_kpick k1 Ks Ks' Ts _ _ HpS HrS) as (kS & HkS & HPS).
+      destruct (replace_kpick k2 Kr Kr' Tr _ _ HpR HrR) as (kR & HkR & HPR).
+      exists c, e, x, (par kS k2), (par kS kR).
+      split; [apply kp_left, HkS | split; [apply kp_right, HkR |]].
+      rewrite HPS, HPR. unfold kprog; cbn [row_map]. reflexivity.
+    - symmetry in HP. apply kprog_par_inv in HP as (k1 & k2 & Hk & H1 & H2).
+      subst k. rewrite H2 in HrS. rewrite H1 in HrR.
+      destruct (replace_kpick k2 Ks Ks' Ts _ _ HpS HrS) as (kS & HkS & HPS).
+      destruct (replace_kpick k1 Kr Kr' Tr _ _ HpR HrR) as (kR & HkR & HPR).
+      exists c, e, x, (par k1 kS), (par kR kS).
+      split; [apply kp_right, HkS | split; [apply kp_left, HkR |]].
+      rewrite HPS, HPR. unfold kprog; cbn [row_map]. reflexivity.
+  Qed.
+
+  (** The converse: the selected pair really steps.  [chan_pair]'s party
+      count is what puts the two endpoints in different leaves — [ds_comm]
+      needs them on opposite sides of a ∥, and two [kpick]s alone do not
+      give that. *)
+  Lemma comm_pair_step : forall k a kmid,
+      k ∋ₖ a □ kmid ->
+      forall c e x k',
+        a = c_send c e ->
+        chan_pair k c ->
+        kmid ∋ₖ c_recv c x □ k' ->
+        forall E, Σ ⊳ ‹ kprog k, E › ⇝
+          {|| kprog k',
+            map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E ||}.
+  Proof.
+    intros k a kmid H1.
+    induction H1 as [K a K' Hp | k1 k1' k2 a H IH | k1 k2 k2' a H IH];
+      intros c e x k' Ha Hcp H2 E; subst a.
+    - (* both endpoints in ONE leaf: excluded by row_parties = 2 *)
+      exfalso. destruct Hcp as [_ Hpar]; cbn [row_parties] in Hpar.
+      destruct (existsb (Nat.eqb c) (cblock_chan K)); discriminate.
+    - inversion H2 as [| kA kA' kB aa HL EqA EqB | kA kB kB' aa HR EqA EqB]; subst.
+      + (* receiver also on the left: sink the step with ds_par_l *)
+        assert (Hcp1 : chan_pair k1 c).
+        { destruct Hcp as [Hlen Hpar].
+          rewrite krow_endpoints_par in Hlen.
+          pose proof (krow_endpoints_perm _ _ _ c H eq_refl) as P1.
+          pose proof (krow_endpoints_perm _ _ _ c HL eq_refl) as P2.
+          rewrite length_app in Hlen.
+          apply Permutation_length in P1, P2. cbn in P1, P2.
+          assert (Hk2 : krow_endpoints k2 c = []).
+          { destruct (krow_endpoints k2 c); [reflexivity | cbn in Hlen; lia]. }
+          split; [lia |].
+          cbn [row_parties] in Hpar.
+          rewrite (krow_endpoints_nil_parties _ _ Hk2) in Hpar. lia. }
+        pose proof (IH c e x _ eq_refl Hcp1 HL E) as Hstep.
+        pose proof (ds_par_l Σ (kprog k1) (kprog k2) E _ Hstep) as Hd.
+        unfold kprog in *; cbn [row_map] in *; cbn [map fst snd] in Hd.
+        exact Hd.
+      + (* a genuine ds_comm_lr *)
+        destruct (kpick_replace _ _ _ H) as (Ks & Ks' & HpS & HrS).
+        destruct (kpick_replace _ _ _ HR) as (Kr & Kr' & HpR & HrR).
+        unfold kprog in *; cbn [row_map] in *.
+        eapply (ds_comm_lr Σ _ _ _ _ Ks Ks' Kr Kr' terminated terminated
+                  c e x E HpS HpR HrS HrR).
+    - inversion H2 as [| kA kA' kB aa HL EqA EqB | kA kB kB' aa HR EqA EqB]; subst.
+      + destruct (kpick_replace _ _ _ H) as (Ks & Ks' & HpS & HrS).
+        destruct (kpick_replace _ _ _ HL) as (Kr & Kr' & HpR & HrR).
+        unfold kprog in *; cbn [row_map] in *.
+        eapply (ds_comm_rl Σ _ _ _ _ Ks Ks' Kr Kr' terminated terminated
+                  c e x E HpS HpR HrS HrR).
+      + assert (Hcp2 : chan_pair k2 c).
+        { destruct Hcp as [Hlen Hpar].
+          rewrite krow_endpoints_par in Hlen.
+          pose proof (krow_endpoints_perm _ _ _ c H eq_refl) as P1.
+          pose proof (krow_endpoints_perm _ _ _ c HR eq_refl) as P2.
+          rewrite length_app in Hlen.
+          apply Permutation_length in P1, P2. cbn in P1, P2.
+          assert (Hk1 : krow_endpoints k1 c = []).
+          { destruct (krow_endpoints k1 c); [reflexivity | cbn in Hlen; lia]. }
+          split; [lia |].
+          cbn [row_parties] in Hpar.
+          rewrite (krow_endpoints_nil_parties _ _ Hk1) in Hpar. lia. }
+        pose proof (IH c e x _ eq_refl Hcp2 HR E) as Hstep.
+        pose proof (ds_par_r Σ (kprog k1) (kprog k2) E _ Hstep) as Hd.
+        unfold kprog in *; cbn [row_map] in *; cbn [map fst snd] in Hd.
+        exact Hd.
+  Qed.
+
+  (** The ensemble action of one rendezvous. *)
+  Definition rmap (x : var) (e : expr) (E : ensemble dim) : ensemble dim :=
+    map (fun '(s,r) => (s [ x |-> eval_expr (i_fn Σ) s e ], r)) E.
+
+  Lemma rmap_comm : forall x1 e1 x2 e2 E,
+      x1 <> x2 -> ~ In x1 (expr_vars e2) -> ~ In x2 (expr_vars e1) ->
+      rmap x2 e2 (rmap x1 e1 E) = rmap x1 e1 (rmap x2 e2 E).
+  Proof.
+    intros x1 e1 x2 e2 E Hx H12 H21.
+    unfold rmap; rewrite !map_map. apply map_ext.
+    intros [s r]; cbn. f_equal.
+    apply rendezvous_store_comm; assumption.
+  Qed.
+
+  Lemma kprog_mixed_inv : forall k st G,
+      mixed_step Σ ({|| kprog k, st :: nil ||}) G ->
+      exists c e x kmid k',
+        k ∋ₖ c_send c e □ kmid /\ kmid ∋ₖ c_recv c x □ k' /\
+        G = {|| kprog k', rmap x e (st :: nil) ||}.
+  Proof.
+    intros k st G Hstep.
+    inversion Hstep as [Gx D E Grest G1 Hperm Hd HeqG HeqG2]; subst.
+    apply Permutation_length_1_inv in Hperm.
+    inversion Hperm; subst.
+    destruct (kprog_step_inv _ _ _ Hd) as (c & e & x & kmid & k' & Hs & Hr & HG).
+    exists c, e, x, kmid, k'. split; [exact Hs | split; [exact Hr |]].
+    rewrite HG. unfold norm, rmap; cbn [app filter snd map]. reflexivity.
+  Qed.
+
+  Lemma kpair_mixed_step : forall k c e x k' (E : ensemble dim),
+      chan_pair k c -> E <> nil ->
+      kpair k c e x k' ->
+      mixed_step Σ ({|| kprog k, E ||}) ({|| kprog k', rmap x e E ||}).
+  Proof.
+    intros k c e x k' E Hcp Hne (kmid & Hs & Hr).
+    pose proof (comm_pair_step _ _ _ Hs c e x k' eq_refl Hcp Hr E) as Hd.
+    (* norm drops nothing: the ensemble is non-empty, so it computes away *)
+    destruct E as [| st E0]; [exfalso; apply Hne; reflexivity |].
+    exact (mixed_lift Σ _ (kprog k) (st :: E0) nil _ (Permutation_refl _) Hd).
+  Qed.
+
+  (** Paper p.15: the selected rendezvous can be commuted to the FRONT of any
+      terminating run of the phase, leaving the terminal collapse alone. *)
+  Lemma comm_reorder : forall G Gt,
+      step_star Σ G Gt -> terminal Gt ->
+      forall k (st : cqstate dim), G = {|| kprog k, st :: nil ||} ->
+      forall c e x k', wf_phase k -> kpair k c e x k' ->
+      exists Gt',
+        step_star Σ ({|| kprog k', rmap x e (st :: nil) ||}) Gt'
+        /\ terminal Gt' /\ collapse Gt' = collapse Gt.
+  Proof.
+    intros G Gt Hstar. induction Hstar as [G | G1 G2 G3 Hmix Hstar IH];
+      intros Hterm k st HG c e x k' Hwf Hpair.
+    - (* a terminal configuration cannot still owe an endpoint *)
+      exfalso. subst G.
+      destruct Hpair as (kmid & Hs & _).
+      apply (kpick_not_terminated _ _ _ Hs).
+      inversion Hterm as [| cc GG Hhd Htl]; subst. exact Hhd.
+    - subst G1.
+      destruct (kprog_mixed_inv _ _ _ Hmix)
+        as (c0 & e0 & x0 & kmid0 & k1 & Hs0 & Hr0 & HG2).
+      assert (Hpair0 : kpair k c0 e0 x0 k1) by (exists kmid0; split; assumption).
+      destruct (Nat.eq_dec c0 c) as [Hcc | Hcc].
+      + (* the scheduler took OUR pair — by uniqueness it really is ours *)
+        subst c0. destruct Hpair as (kmid & Hs & Hr).
+        destruct (comm_pair_unique k c e x kmid k' e0 x0 kmid0 k1
+                    Hwf Hs Hr Hs0 Hr0) as (He & Hx & Hk).
+        subst e0 x0 k1.
+        exists G3. split; [| split; [exact Hterm | reflexivity]].
+        rewrite <- HG2. exact Hstar.
+      + (* a different pair: commute ours to the front *)
+        destruct (kpair_confluent k c0 e0 x0 k1 c e x k' Hcc Hpair0 Hpair)
+          as (k12 & Hp1 & Hp2).
+        destruct (two_pairs_indep k c0 e0 x0 k1 c e x k12 Hwf Hpair0 Hp1)
+          as (Hxx & Hxe0 & Hx0e).
+        assert (Hwf1 : wf_phase k1) by (eapply wf_phase_pair; eassumption).
+        destruct st as [s r].
+        pose proof (IH Hterm k1 (s [ x0 |-> eval_expr (i_fn Σ) s e0 ], r)
+                      ltac:(rewrite HG2; unfold rmap; cbn [map]; reflexivity)
+                      c e x k12 Hwf1 Hp1) as (Gt1 & Hst1 & Ht1 & Hc1).
+        assert (Hwf' : wf_phase k').
+        { destruct Hpair as (m & A & B).
+          exact (wf_phase_pair k c e x m k' Hwf A B). }
+        assert (Hcp' : chan_pair k' c0).
+        { destruct Hp2 as (m2 & A2 & _).
+          exact (wf_phase_chan_pair k' m2 c0 e0 Hwf' A2). }
+        exists Gt1. split; [| split; [exact Ht1 | exact Hc1]].
+        eapply star_step.
+        * apply (kpair_mixed_step k' c0 e0 x0 k12
+                   (rmap x e ((s,r) :: nil)) Hcp'
+                   ltac:(unfold rmap; cbn [map]; discriminate) Hp2).
+        * rewrite (rmap_comm x e x0 e0 ((s,r) :: nil) Hxx Hxe0 Hx0e).
+          unfold rmap in Hst1 |- *; cbn [map] in Hst1 |- *. exact Hst1.
+  Qed.
+
 
 End SoundnessFacts.
