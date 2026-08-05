@@ -297,10 +297,25 @@ Inductive derivable {dim} (Σ : interp dim)
     : assertion dim -> program -> assertion dim -> Prop :=
 (* Par-Comp-MP.  [cut P] reduces on a concrete program, so the first
    premise is closed by reflexivity and the three rows are read off rather
-   than supplied. *)
+   than supplied.
+
+   [wf_assertion] on Q2 and Q3 is the paper's assertion-formation check
+   (p.10) — "if A is formed and defined in σ it is interpreted as an effect,
+   0 ⊑ σ(A) ⊑ I" — surfacing here for the same reason it surfaces on Conseq:
+   [qpred] is only semi-deep, so nothing in the TYPE of an assertion forces
+   its operator to be an effect.
+
+   This is the one rule that composes three stages, so it is the one rule
+   whose validity has to SUM over an intermediate ensemble.  A state whose
+   guard fails contributes 0 on the left while still contributing on the
+   right, so without the check a non-effect postcondition can drag the sum
+   below the precondition's degree and the rule is unsound.  Q1 needs no
+   check: the first stage still starts from a single state. *)
 | rule_par_comp : forall Q0 Q1 Q2 Q3 P d k t,
     cut P = (d, k, t) ->
     wf_cut k t P ->
+    wf_assertion Σ Q2 ->
+    wf_assertion Σ Q3 ->
     dloc Σ Q0 d Q1 ->
     Σ ⊢ₖ {{ Q1 }} k {{ Q2 }} ->
     Σ ⊢ₚ {{ Q2 }} t {{ Q3 }} ->

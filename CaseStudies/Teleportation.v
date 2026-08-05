@@ -654,6 +654,10 @@ Section Spec.
                              (Q2 := mk_assertion chi (qCorr i j)).
     - exact tele_cut.
     - exact tele_wf_cut.
+    - (* Q2 is formed: the Pauli-frame predicate is an effect at every store *)
+      intros s M HM; cbn in HM; inversion HM; subst; apply is_effect_corr3.
+    - (* Q3 is formed *)
+      intros s M HM; cbn in HM; inversion HM; apply is_effect_base3.
     - (* Step I: Par-Disjoint-MP *)
       apply rule_par_disjoint.
       + repeat constructor; repeat split;
@@ -668,6 +672,8 @@ Section Spec.
       + split.
         * repeat split; intros x Hx Hy; vm_compute in Hx, Hy; intuition congruence.
         * intros c [].
+      + intros s M HM; cbn in HM; inversion HM; apply is_effect_base3.
+      + intros s M HM; cbn in HM; inversion HM; apply is_effect_base3.
       + apply rule_par_disjoint.
         * repeat constructor; repeat split;
             intros x Hx Hy; vm_compute in Hx, Hy; intuition congruence.

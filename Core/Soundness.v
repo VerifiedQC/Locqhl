@@ -202,6 +202,8 @@ Section Soundness.
            (t : program),
       cut P = (d, k, t) ->
       wf_cut k t P ->
+      wf_assertion Σ Q2 ->
+      wf_assertion Σ Q3 ->
       Σ ⊨ {{ Q0 }} lrow_prog d {{ Q1 }} ->
       Σ ⊨ {{ Q1 }} krow_prog k {{ Q2 }} ->
       Σ ⊨ {{ Q2 }} t {{ Q3 }} ->
@@ -296,6 +298,7 @@ Section Soundness.
       (Pr : assertion dim -> program -> assertion dim -> Prop)
       (Hpc : forall Q0 Q1 Q2 Q3 P d k t,
           cut P = (d, k, t) -> wf_cut k t P ->
+          wf_assertion Σ Q2 -> wf_assertion Σ Q3 ->
           dloc Σ Q0 d Q1 ->
           Σ ⊢ₖ {{ Q1 }} k {{ Q2 }} ->
           Σ ⊢ₚ {{ Q2 }} t {{ Q3 }} -> Pr Q2 t Q3 ->
@@ -320,8 +323,8 @@ Section Soundness.
       (d : Σ ⊢ₚ {{ Q }} P {{ R }}) {struct d} : Pr Q P R :=
     let rec := derivable_ind' Pr Hpc Hdn Hba Hax Hcq in
     match d with
-    | rule_par_comp _ Q0 Q1 Q2 Q3 P0 d0 k0 t0 h1 h2 hd hk dt =>
-        Hpc Q0 Q1 Q2 Q3 P0 d0 k0 t0 h1 h2 hd hk dt (rec _ _ _ dt)
+    | rule_par_comp _ Q0 Q1 Q2 Q3 P0 d0 k0 t0 h1 h2 hw2 hw3 hd hk dt =>
+        Hpc Q0 Q1 Q2 Q3 P0 d0 k0 t0 h1 h2 hw2 hw3 hd hk dt (rec _ _ _ dt)
     | rule_done _ Q0 P0 h => Hdn Q0 P0 h
     | rule_branch_accum _ phi B P0 fam df hex =>
         Hba phi B P0 fam df
@@ -360,10 +363,14 @@ Section Soundness.
                Σ ⊢ₚ {{ Q }} P {{ R }} -> Σ ⊨ {{ Q }} P {{ R }}).
     { apply (derivable_ind' (fun Q P R => Σ ⊨ {{ Q }} P {{ R }})).
       - (* Par-Comp-MP *)
-        intros q0 q1 q2 q3 p d k t Hcut Hwf Hd Hk Ht IHt.
-        eapply par_comp_sound; try eassumption.
-        + exact (dloc_sound interp_ok _ _ _ Hd).
-        + exact (comm_derivable_sound interp_ok _ _ _ Hk).
+        intros q0 q1 q2 q3 p d k t Hcut Hwf Hw2 Hw3 Hd Hk Ht IHt.
+        (* the two wf_assertion goals both unify with either hypothesis, so
+           pin Q1 and Q2 rather than letting [eassumption] pick *)
+        eapply (par_comp_sound q0 q1 q2 q3);
+          [ exact Hcut | exact Hwf | exact Hw2 | exact Hw3
+          | exact (dloc_sound interp_ok _ _ _ Hd)
+          | exact (comm_derivable_sound interp_ok _ _ _ Hk)
+          | exact IHt ].
       - (* Done *)
         intros q p Ht. apply done_sound; assumption.
       - (* Branch-Accum *)
