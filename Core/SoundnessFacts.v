@@ -9,6 +9,9 @@
       degree bookkeeping over ensembles            (total_degree_* )
       non-interfering blocks commute               (denote_comm, paper Lemma 1)
       every interleaving of a row normalises       (prog_adequacy)
+      the pair combinatorics of a phase            (comm_pair_unique,
+                                                    kpair_confluent)
+      every run of a phase reorders                (comm_reorder)
 ** **)
 
 From Stdlib Require Import Lists.List.
@@ -627,10 +630,9 @@ Section SoundnessFacts.
     rewrite app_nil_r in Hp. exact Hp.
   Qed.
 
-  (** ** 3. Par-Disjoint-MP.  Route: [local_sound] is the one-leaf base
-         case; then wf ⟹ DisjMP (Thm 2.1) ⟹ interference freedom (Lemma 1)
-         normalises every interleaving to the [locals_seq]
-         sequentialisation. *)
+  (** ** 3c. Degree bookkeeping over ensembles, up to [denote_sound] — the
+         Hoare half of Par-Disjoint-MP, which §4 and §5 then feed every
+         interleaving into. *)
 
   (** [denote] preserves state legitimacy — the seq case of [denote_sound]
       threads [ensemble_ok] through the intermediate ensemble. *)
@@ -2636,14 +2638,13 @@ Section SoundnessFacts.
     unfold ddenote in Hp; simpl in Hp. rewrite app_nil_r in Hp. exact Hp.
   Qed.
 
-(** ** 6. Comm-Select-MP — the combinatorics of one matched pair ********
+  (** ** 6. Comm-Select-MP — the combinatorics of one matched pair ******
 
-    A communication phase steps only by rendezvous, and a rendezvous is the
-    assignment x := e.  What the rule needs is that the SELECTED pair can be
-    commuted to the front of any terminating run; [wf_phase] is exactly what
-    pays for that.  This section is the syntactic half — picks/kpick against
-    the phase's action list — and §7 is the semantic half.
-*********************************************************************)
+      A communication phase steps only by rendezvous, and a rendezvous is the
+      assignment x := e.  What the rule needs is that the SELECTED pair can be
+      commuted to the front of any terminating run; [wf_phase] is exactly what
+      pays for that.  This section is the syntactic half — picks/kpick against
+      the phase's action list — and §7 is the semantic half. *)
 
   (** A pick removes exactly its action. *)
   Lemma picks_perm : forall K a K', K ∋ a □ K' -> Permutation K (a :: K').
@@ -3196,13 +3197,12 @@ Section SoundnessFacts.
         apply in_or_app; right; apply in_or_app; left; exact Hin.
   Qed.
 
-(** ** 7. Comm-Select-MP — the semantic half ***************************
+  (** ** 7. Comm-Select-MP — the semantic half **************************
 
-    A communication phase runs as a program whose leaves are [advance ↓ K ↓].
-    Such a program can ONLY step by rendezvous, its configuration stays a
-    single component over a single state, and — by §6 — the selected pair can
-    be commuted to the front of any terminating run.
-*********************************************************************)
+      A communication phase runs as a program whose leaves are
+      [advance ↓ K ↓].  Such a program can ONLY step by rendezvous, its
+      configuration stays a single component over a single state, and — by
+      §6 — the selected pair commutes to the front of any terminating run. *)
 
   (** The K-row read as a program.  Same body as [Soundness.krow_prog], which
       cannot be used here: it is defined downstream.  The two are convertible,
