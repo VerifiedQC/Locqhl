@@ -8,9 +8,8 @@
     than about one class of programs.
 
     The per-rule lemmas are stated against the three-judgment system (dloc on
-    lrow, ⊢ₖ on krow, ⊢ₚ on program).  Every one of them is machine-checked
-    except Par-Comp-MP, as is the assembly — the induction principle and
-    Theorem 4.1.
+    lrow, ⊢ₖ on krow, ⊢ₚ on program).  Every one of them is machine-checked,
+    as is the assembly — the induction principle and Theorem 4.1.
 ** **)
 
 From Stdlib Require Import Lists.List.
@@ -196,19 +195,134 @@ Section Soundness.
   Qed.
 
   (** ** 4. Par-Comp-MP.  Every terminating run factors through the three
-         aligned stages read off by [cut]. *)
+         aligned stages read off by [cut].
+
+      [par_comp_factor] does the work: it BUILDS the run that runs the
+      d-stage, then the phase, then the tail, and confluence
+      ([Term_cfg_reduct]) says the given run has the same collapse.  What is
+      left here is the degree chain, one stage at a time.
+
+      The one subtlety is that the intermediate assertions are not known to
+      hold at the intermediate states — nothing says they should.  Where the
+      guard of Q1 or Q2 fails at a state, its degree there is 0 by
+      definition, and the inequality is closed by
+      [total_degree_nonneg] instead.  That is where [wf_assertion Q2] and
+      [wf_assertion Q3] are spent, and the only place. *)
+
+  (** One state's contribution, whether or not the precondition holds there. *)
+  Lemma degree_state_bound :
+    wf_interp Σ ->
+    forall (QA QB : assertion dim) (Prog : program) (st : cqstate dim)
+           (Ef : ensemble dim),
+      wf_assertion Σ QB -> state_ok st ->
+      Term_cfg Σ ((Prog, st :: nil) :: nil) Ef ->
+      Σ ⊨ {{ QA }} Prog {{ QB }} ->
+      (degree Σ QA st <= total_degree Σ QB Ef)%R /\ ensemble_ok Ef.
+  Proof.
+    intros interp_ok QA QB Prog [s0 r0] Ef HQB (HW & Hhm & Hpd) HTc Hval.
+    destruct (Term_cfg_Term Σ Prog (s0, r0) Ef HTc) as (Ef0 & HT0 & Hperm).
+    assert (Hok : ensemble_ok Ef0)
+      by exact (term_preservation Σ interp_ok Prog s0 r0 Ef0 HW Hhm Hpd HT0).
+    assert (HokF : ensemble_ok Ef)
+      by (eapply Permutation_Forall; [exact Hperm | exact Hok]).
+    split; [| exact HokF].
+    rewrite <- (total_degree_perm Σ QB _ _ Hperm).
+    destruct (formula_holds Σ s0 (classical_part QA)) eqn:Hf.
+    - destruct (qpred_denote Σ s0 (quantum_part QA)) as [M |] eqn:HM.
+      + exact (Hval s0 r0 HW Hhm Hpd Hf (ex_intro _ M HM) Ef0 HT0).
+      + replace (degree Σ QA (s0, r0)) with 0%R
+          by (unfold degree; rewrite Hf, HM; reflexivity).
+        exact (total_degree_nonneg Σ QB Ef0 HQB Hok).
+    - replace (degree Σ QA (s0, r0)) with 0%R
+        by (unfold degree; rewrite Hf; reflexivity).
+      exact (total_degree_nonneg Σ QB Ef0 HQB Hok).
+  Qed.
+
+  (** …summed over a whole stage. *)
+  Lemma degree_stage_bound :
+    wf_interp Σ ->
+    forall (QA QB : assertion dim) (Prog : program) (E0 : ensemble dim)
+           (Es : list (ensemble dim)),
+      wf_assertion Σ QB -> ensemble_ok E0 ->
+      Forall2 (fun st Ef => Term_cfg Σ ((Prog, st :: nil) :: nil) Ef) E0 Es ->
+      Σ ⊨ {{ QA }} Prog {{ QB }} ->
+      (total_degree Σ QA E0 <= total_degree Σ QB (concat Es))%R
+      /\ ensemble_ok (concat Es).
+  Proof.
+    intros interp_ok QA QB Prog E0 Es HQB Hok HF Hval.
+    induction HF as [| st Ef E0 Es Hh HF IH].
+    - cbn [concat]; unfold total_degree; cbn [map fold_right].
+      split; [lra | constructor].
+    - destruct (degree_state_bound interp_ok QA QB Prog st Ef HQB
+                  (Forall_inv Hok) Hh Hval) as (Hd & HokF).
+      destruct (IH (Forall_inv_tail Hok)) as (Hrest & Hokr).
+      cbn [concat]; rewrite total_degree_app.
+      split; [unfold total_degree in *; cbn [map fold_right] in *; lra |].
+      apply Forall_app; split; assumption.
+  Qed.
+
   Lemma par_comp_sound :
+    wf_interp Σ ->
     forall (Q0 Q1 Q2 Q3 : assertion dim) (P : program) (d : lrow) (k : krow)
            (t : program),
       cut P = (d, k, t) ->
-      wf_cut k t P ->
+      wf_program P ->
       wf_assertion Σ Q2 ->
       wf_assertion Σ Q3 ->
       Σ ⊨ {{ Q0 }} lrow_prog d {{ Q1 }} ->
       Σ ⊨ {{ Q1 }} krow_prog k {{ Q2 }} ->
       Σ ⊨ {{ Q2 }} t {{ Q3 }} ->
       Σ ⊨ {{ Q0 }} P {{ Q3 }}.
-  Admitted.
+  Proof.
+    intros interp_ok Q0 Q1 Q2 Q3 P d k t Hcut Hwf HQ2 HQ3 H1 H2 H3
+           s r HWFr Hherm Hpsd Hh Hdef E HTerm.
+    pose proof (wf_interp_local Σ interp_ok) as Hloc.
+    destruct (par_comp_factor Σ Hloc P d k t (s, r) E Hcut Hwf HTerm)
+      as (Ed & Eks & Efs & HEd & HFk & HFt & HEfin).
+    (* the D-row's own run, which is what premise 1 speaks about *)
+    assert (Hdrow : row_map dblock_leaf (lrow_prog d) = d)
+      by (unfold lrow_prog; rewrite row_map_map;
+          cbn [dblock_leaf residual_lblock]; apply row_map_id).
+    assert (Hdterm : prog_terminated (row_map dstep_leaf (lrow_prog d)))
+      by (unfold prog_terminated, lrow_prog; rewrite row_map_map;
+          apply row_all_map; intro D; reflexivity).
+    destruct (drun_row Σ (lrow_prog d) ((s, r) :: nil))
+      as (Gd & Hsd & Halld & Hcd).
+    rewrite Hdrow in Hcd.
+    assert (HTd : Term Σ (lrow_prog d) (s, r) (collapse Gd)).
+    { exists Gd. cbn [norm filter snd] in Hsd.
+      split; [exact Hsd | split; [| reflexivity]].
+      unfold terminal; eapply Forall_impl; [| exact Halld].
+      intros c Hc; cbv beta in Hc; rewrite Hc; exact Hdterm. }
+    assert (HpermD : Permutation (collapse Gd) Ed)
+      by (eapply Permutation_trans; [exact Hcd | apply Permutation_sym, HEd]).
+    assert (HokEd : ensemble_ok Ed).
+    { eapply Permutation_Forall; [exact HpermD |].
+      exact (term_preservation Σ interp_ok _ s r _ HWFr Hherm Hpsd HTd). }
+    (* stage 1 *)
+    assert (Hs1 : (degree Σ Q0 (s, r) <= total_degree Σ Q1 Ed)%R).
+    { rewrite <- (total_degree_perm Σ Q1 _ _ HpermD).
+      exact (H1 s r HWFr Hherm Hpsd Hh Hdef _ HTd). }
+    (* stage 2 *)
+    assert (HFk' : Forall2 (fun st1 Ek =>
+                     Term_cfg Σ ((krow_prog k, st1 :: nil) :: nil) Ek) Ed Eks).
+    { eapply Forall2_impl; [| exact HFk].
+      intros st1 Ek Hkr. rewrite krow_prog_kprog.
+      exact (krun_Term Σ k (st1 :: nil) Ek Hkr). }
+    destruct (degree_stage_bound interp_ok Q1 Q2 (krow_prog k) Ed Eks
+                HQ2 HokEd HFk' H2) as (Hs2 & HokEk).
+    (* stage 3 *)
+    assert (HFt' : Forall2 (fun st2 Ef =>
+                     Term_cfg Σ ((t, st2 :: nil) :: nil) Ef) (concat Eks) Efs).
+    { eapply Forall2_impl; [| exact HFt].
+      intros st2 Ef (G & Hs & Ht & Hc). exists G.
+      cbn [norm filter snd].
+      split; [exact Hs | split; [exact Ht | rewrite Hc; apply Permutation_refl]]. }
+    destruct (degree_stage_bound interp_ok Q2 Q3 t (concat Eks) Efs
+                HQ3 HokEk HFt' H3) as (Hs3 & _).
+    rewrite (total_degree_perm Σ Q3 _ _ HEfin).
+    lra.
+  Qed.
 
   (** ** 5. Aux-Subst — a variable the program neither reads nor writes may
          be replaced by any value throughout the triple. *)
@@ -297,7 +411,7 @@ Section Soundness.
   Fixpoint derivable_ind'
       (Pr : assertion dim -> program -> assertion dim -> Prop)
       (Hpc : forall Q0 Q1 Q2 Q3 P d k t,
-          cut P = (d, k, t) -> wf_cut k t P ->
+          cut P = (d, k, t) -> wf_program P ->
           wf_assertion Σ Q2 -> wf_assertion Σ Q3 ->
           dloc Σ Q0 d Q1 ->
           Σ ⊢ₖ {{ Q1 }} k {{ Q2 }} ->
@@ -366,7 +480,7 @@ Section Soundness.
         intros q0 q1 q2 q3 p d k t Hcut Hwf Hw2 Hw3 Hd Hk Ht IHt.
         (* the two wf_assertion goals both unify with either hypothesis, so
            pin Q1 and Q2 rather than letting [eassumption] pick *)
-        eapply (par_comp_sound q0 q1 q2 q3);
+        eapply (par_comp_sound interp_ok q0 q1 q2 q3);
           [ exact Hcut | exact Hwf | exact Hw2 | exact Hw3
           | exact (dloc_sound interp_ok _ _ _ Hd)
           | exact (comm_derivable_sound interp_ok _ _ _ Hk)
