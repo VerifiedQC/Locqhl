@@ -266,12 +266,27 @@ Section Spec.
   Lemma tele_cut : cut tele = (d1, k1, t1).
   Proof. reflexivity. Qed.
 
-  Lemma tele_wf_cut : wf_cut k1 t1 tele.
+  (** Definition 2.1 for [tele]: Alice and Bob share no variable or qubit;
+      cz and cx each carry one send and one receive in two distinct leaves;
+      both endpoints of each channel sit in the same phase; and that phase
+      receives into i and j while reading only m1 and m2. *)
+  Lemma tele_wf_program : wf_program tele.
   Proof.
-    split.
+    split; [| split; [| split]].
     - repeat split; intros x Hx Hy; vm_compute in Hx, Hy; intuition congruence.
-    - intros c _ [].
+    - intros c Hc; vm_compute in Hc.
+      destruct Hc as [Hc | [Hc | [Hc | [Hc | []]]]]; subst c;
+        repeat split; reflexivity.
+    - intros n c Hc; destruct n as [| [| n]]; vm_compute in Hc |- *;
+        try contradiction;
+        destruct Hc as [Hc | [Hc | [Hc | [Hc | []]]]]; subst c; reflexivity.
+    - intro n; destruct n as [| [| n]]; vm_compute; split;
+        solve [ repeat constructor; cbn; intuition congruence
+              | intros x Hx Hy; cbn in Hx, Hy; intuition congruence
+              | constructor
+              | intros x Hx Hy; contradiction ].
   Qed.
+
 
 
   (* ---- Fig. 6 Step I notation ------------------------------------- *)
@@ -653,7 +668,11 @@ Section Spec.
                                       j (e_var m2)) i (e_var m1))
                              (Q2 := mk_assertion chi (qCorr i j)).
     - exact tele_cut.
-    - exact tele_wf_cut.
+    - exact tele_wf_program.
+    - (* Q2 is formed: the Pauli-frame predicate is an effect at every store *)
+      intros s M HM; cbn in HM; inversion HM; subst; apply is_effect_corr3.
+    - (* Q3 is formed *)
+      intros s M HM; cbn in HM; inversion HM; apply is_effect_base3.
     - (* Step I: Par-Disjoint-MP *)
       apply rule_par_disjoint.
       + repeat constructor; repeat split;
@@ -665,9 +684,17 @@ Section Spec.
                                (Q1 := mk_assertion chi qB)
                                (Q2 := mk_assertion chi qB).
       + reflexivity.
-      + split.
-        * repeat split; intros x Hx Hy; vm_compute in Hx, Hy; intuition congruence.
-        * intros c [].
+      + (* the tail is well formed too: it owns no channel at all *)
+        split; [| split; [| split]].
+        * repeat split; intros x Hx Hy; vm_compute in Hx, Hy;
+            intuition congruence.
+        * intros c Hc; vm_compute in Hc; contradiction.
+        * intros n c Hc; destruct n as [| n]; vm_compute in Hc; contradiction.
+        * intro n; destruct n as [| n]; vm_compute; split;
+            [constructor | intros x Hx Hy; contradiction
+             | constructor | intros x Hx Hy; contradiction].
+      + intros s M HM; cbn in HM; inversion HM; apply is_effect_base3.
+      + intros s M HM; cbn in HM; inversion HM; apply is_effect_base3.
       + apply rule_par_disjoint.
         * repeat constructor; repeat split;
             intros x Hx Hy; vm_compute in Hx, Hy; intuition congruence.

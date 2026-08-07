@@ -7,6 +7,8 @@
 
 From Stdlib Require Import Lists.List.
 From Stdlib Require Import Arith.PeanoNat.
+From Stdlib Require Import Sorting.Permutation.
+From Stdlib Require Import Lia.
 From QuantumLib Require Import Matrix Quantum.
 From Locqhl.Core Require Import Syntax Names QuantumActions SemanticDomain Semantics Assertions WellFormed.
 Import ListNotations.
@@ -161,11 +163,13 @@ Notation "k '∋ₖ' a '□' k'" := (kpick k a k')
 (** ** Side conditions of the distributed rules ***********************
 
       Each distributed rule carries exactly the syntactic check its own
-      soundness argument consumes, rather than the whole of Definition 2.1:
+      soundness argument consumes.  Two of them need less than Definition
+      2.1; Par-Comp-MP needs all of it:
 
         Par-Disjoint-MP    wf_ownership PD    DisjMP on the D-row
         Comm-Select-MP     wf_phase PK        the phase matches, and commutes
-        Par-Comp-MP        wf_cut PK PT P     the cut is legal
+        Par-Comp-MP        wf_program P       Definition 2.1 in full — the
+                                              only rule that needs it
 
       Definition 2.1 then discharges all three at once for a well-formed
       source program — that is what Theorem 2.1 and its companions are for —
@@ -204,13 +208,137 @@ Definition wf_phase (k : krow) : Prop :=
   /\ NoDup (phase_recv k)
   /\ disjoint (phase_recv k) (phase_oread k).
 
-(** Par-Comp-MP's side condition: the cut is legal.  Ownership across the
-    leaves commutes a local step of one leaf past a rendezvous between two
-    others, and the channel disjointness stops the displayed phase from
-    matching an endpoint that belongs to a tail.  Neither clause recurses
-    into the tail: it carries its own conditions inside its own premise. **)
-Definition wf_cut (k : krow) (t P : program) : Prop :=
-  wf_ownership P /\ disjoint (krow_chan k) (program_chan t).
+(** Par-Comp-MP's side condition is Definition 2.1 itself.  Alone among the
+    eight rules it consumes all four clauses:
+
+      wf_ownership          commutes a local step of one leaf past a
+                            rendezvous between two others
+      wf_channels           a receive has exactly one send it can pair with
+      wf_phase_independence two rendezvous in ONE leaf commute — [wf_ownership]
+                            separates different leaves and cannot see this
+      wf_phase_aligned      together with [wf_channels], keeps the displayed
+                            phase from reaching into the tail: see
+                            [cut_chan_disjoint] just below
+
+    The last two are what make the TAIL run determinately, which is what the
+    rule's normalisation consumes — a d-stage [if] splits the configuration
+    in two whose d-steps are then both absorbed, leaving the same program
+    holding half an ensemble each, and those have to be recombined.
+
+    A run of this semantics makes exactly two kinds of choice: which send a
+    receive pairs with (removed by [wf_channels]) and which of two available
+    rendezvous goes first (removed by [wf_phase_independence]). *)
+
+Lemma perm_filter_len : forall {A} (f : A -> bool) l l',
+    Permutation l l' -> length (filter f l) = length (filter f l').
+Proof.
+  intros A f l l' H;
+    induction H as [| x l l' H IH | x y l | l1 l2 l3 H1 IH1 H2 IH2]; cbn.
+  - reflexivity.
+  - destruct (f x); cbn; lia.
+  - destruct (f x), (f y); cbn; reflexivity.
+  - lia.
+Qed.
+
+(** The actions of a program are those of its current phase plus those of
+    its tail — the cut splits the endpoint multiset in two. *)
+Lemma cut_actions : forall P d k t,
+    cut P = (d, k, t) ->
+    Permutation (program_actions P) (krow_actions k ++ program_actions t).
+Proof.
+  induction P as [S0 | P1 IH1 P2 IH2]; intros d k t Hcut.
+  - destruct S0 as [| R K T]; cbn in Hcut; injection Hcut as _ Hk Ht;
+      subst k t; cbn; apply Permutation_refl.
+  - cbn in Hcut.
+    destruct (cut P1) as [[d1 k1] t1] eqn:E1.
+    destruct (cut P2) as [[d2 k2] t2] eqn:E2.
+    injection Hcut as _ Hk Ht; subst k t.
+    unfold program_actions, krow_actions in *; cbn [row_flat].
+    eapply Permutation_trans;
+      [apply Permutation_app;
+        [apply (IH1 d1 k1 t1 eq_refl) | apply (IH2 d2 k2 t2 eq_refl)] |].
+    rewrite <- !app_assoc. apply Permutation_app_head.
+    rewrite !app_assoc. apply Permutation_app_tail, Permutation_app_comm.
+Qed.
+
+Lemma program_chan_actions : forall P,
+    program_chan P = map caction_chan (program_actions P).
+Proof.
+  unfold program_chan, program_actions;
+    induction P as [S0 | P1 IH1 P2 IH2]; cbn [row_flat].
+  - induction S0 as [| R K T IH]; cbn [process_chan process_actions];
+      [reflexivity |].
+    unfold cblock_chan; rewrite map_app, IH; reflexivity.
+  - rewrite map_app, IH1, IH2; reflexivity.
+Qed.
+
+Lemma krow_chan_actions' : forall k,
+    krow_chan k = map caction_chan (krow_actions k).
+Proof.
+  unfold krow_chan, krow_actions;
+    induction k as [K | k1 IH1 k2 IH2]; cbn [row_flat];
+    [reflexivity | rewrite map_app, IH1, IH2; reflexivity].
+Qed.
+
+(** The cut's phase and its tail share no channel.  A channel occurring in
+    the phase already has both its endpoints there ([wf_phase_aligned]), and
+    it has only two in the whole tree ([wf_channels]), so none is left for
+    the tail. *)
+Lemma cut_chan_disjoint : forall P d k t,
+    wf_channels P -> wf_phase_aligned P -> cut P = (d, k, t) ->
+    disjoint (krow_chan k) (program_chan t).
+Proof.
+  intros P d k t Hch Hal Hcut c Hk Ht.
+  pose proof (cut_actions P d k t Hcut) as Hsplit.
+  (* c has an endpoint in the phase, and one in the tail *)
+  rewrite krow_chan_actions' in Hk; apply in_map_iff in Hk as (a & Ha & HaIn).
+  rewrite program_chan_actions in Ht; apply in_map_iff in Ht as (b & Hb & HbIn).
+  (* the phase already holds two of them *)
+  assert (Hphase : krow_actions k = phase_actions P 0).
+  { clear -Hcut. unfold phase_actions, phase_at, phase_row, krow_actions.
+    revert d k t Hcut; induction P as [S0 | P1 IH1 P2 IH2]; intros d k t Hcut.
+    - destruct S0 as [| R K T]; cbn in Hcut; injection Hcut as _ Hk _;
+        subst k; cbn; rewrite ?app_nil_r; reflexivity.
+    - cbn in Hcut.
+      destruct (cut P1) as [[d1 k1] t1] eqn:E1.
+      destruct (cut P2) as [[d2 k2] t2] eqn:E2.
+      injection Hcut as _ Hk _; subst k.
+      cbn [row_flat row_map row_leaves]; rewrite concat_app.
+      rewrite (IH1 d1 k1 t1 eq_refl), (IH2 d2 k2 t2 eq_refl); reflexivity. }
+  assert (Hin0 : In c (map caction_chan (phase_actions P 0)))
+    by (rewrite <- Hphase; apply in_map_iff; exists a; split; assumption).
+  specialize (Hal 0%nat c Hin0).
+  (* but the whole tree holds only two *)
+  assert (HinP : In c (program_chan P)).
+  { rewrite program_chan_actions; apply in_map_iff; exists a; split;
+      [exact Ha |].
+    eapply Permutation_in; [apply Permutation_sym, Hsplit |].
+    apply in_or_app; left; exact HaIn. }
+  destruct (Hch c HinP) as (Hs & Hr & _).
+  unfold endpoints_of in Hs, Hr.
+  pose proof (filter_length_split is_send
+                (filter (fun x => Nat.eqb (caction_chan x) c)
+                        (program_actions P))) as Hsplit2.
+  rewrite Hs, Hr in Hsplit2.
+  (* the split of the action list splits the endpoint list too *)
+  assert (Hlen : length (filter (fun x => Nat.eqb (caction_chan x) c)
+                                (program_actions P))
+                 = (length (filter (fun x => Nat.eqb (caction_chan x) c)
+                                   (krow_actions k))
+                    + length (filter (fun x => Nat.eqb (caction_chan x) c)
+                                     (program_actions t)))%nat).
+  { rewrite <- length_app, <- filter_app.
+    apply perm_filter_len, Hsplit. }
+  rewrite Hphase, Hal in Hlen.
+  assert (Hne : filter (fun x => Nat.eqb (caction_chan x) c)
+                       (program_actions t) <> nil).
+  { intro Hnil. assert (Hbf : In b (filter (fun x => Nat.eqb (caction_chan x) c)
+                                           (program_actions t)))
+      by (apply filter_In; split; [exact HbIn | rewrite Hb; apply Nat.eqb_refl]).
+    rewrite Hnil in Hbf; exact Hbf. }
+  destruct (filter (fun x => Nat.eqb (caction_chan x) c) (program_actions t));
+    [contradiction | cbn in Hlen; lia].
+Qed.
 
 (** ** Helpers for Branch-Accum *************************************** *)
 
@@ -297,10 +425,29 @@ Inductive derivable {dim} (Σ : interp dim)
     : assertion dim -> program -> assertion dim -> Prop :=
 (* Par-Comp-MP.  [cut P] reduces on a concrete program, so the first
    premise is closed by reflexivity and the three rows are read off rather
-   than supplied. *)
+   than supplied.
+
+   [wf_assertion] on Q2 and Q3 is the paper's assertion-formation check
+   (p.10) — "if A is formed and defined in σ it is interpreted as an effect,
+   0 ⊑ σ(A) ⊑ I" — surfacing here for the same reason it surfaces on Conseq:
+   [qpred] is only semi-deep, so nothing in the TYPE of an assertion forces
+   its operator to be an effect.
+
+   This is the one rule that composes three stages, so it is the one rule
+   whose validity has to SUM over an intermediate ensemble.  A state whose
+   guard fails contributes 0 on the left while still contributing on the
+   right, so without the check a non-effect postcondition can drag the sum
+   below the precondition's degree and the rule is unsound.  Q1 needs no
+   check: the first stage still starts from a single state.
+
+   The side condition is [wf_program P] — Definition 2.1 in full, and this
+   is the only rule that needs it.  See the note above [cut_actions] for
+   which clause pays for what. *)
 | rule_par_comp : forall Q0 Q1 Q2 Q3 P d k t,
     cut P = (d, k, t) ->
-    wf_cut k t P ->
+    wf_program P ->
+    wf_assertion Σ Q2 ->
+    wf_assertion Σ Q3 ->
     dloc Σ Q0 d Q1 ->
     Σ ⊢ₖ {{ Q1 }} k {{ Q2 }} ->
     Σ ⊢ₚ {{ Q2 }} t {{ Q3 }} ->
