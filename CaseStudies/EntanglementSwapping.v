@@ -2,7 +2,7 @@ From Stdlib Require Import Lists.List.
 From Stdlib Require Import Arith.PeanoNat.
 From QuantumLib Require Import Matrix Quantum Pad.
 From Locqhl.Core Require Import Syntax Names QuantumActions Semantics Assertions WellFormed Rules SoundnessFacts Soundness.
-From Locqhl.CaseStudies Require Import SwapComplete.
+From Locqhl.CaseStudies Require SwapComplete.
 Import ListNotations.
 Open Scope proc_scope.
 
@@ -107,10 +107,10 @@ Local Open Scope matrix_scope.
     free, hence the two I's. *)
 Definition eswap_pre : assertion 4 :=
   {| classical_part := f_bexp b_true;
-     quantum_part   := q_op (fun _ => Some (Psi0 × Psi0†)) nil |}.
+     quantum_part   := q_op (fun _ => Some (SwapComplete.Psi0 × SwapComplete.Psi0†)) nil |}.
 Definition eswap_post : assertion 4 :=
   {| classical_part := f_bexp b_true;
-     quantum_part   := q_op (fun _ => Some (EPR ⊗ I 2 ⊗ I 2)) nil |}.
+     quantum_part   := q_op (fun _ => Some (SwapComplete.EPR ⊗ I 2 ⊗ I 2)) nil |}.
 
 Definition es_uu (U : usym) (qs : list qvar) : Square (2 ^ 4) :=
   match U, qs with
@@ -240,6 +240,58 @@ Proof.
             | intros x Hx Hy; contradiction ].
 Qed.
 
+(** ** Effects *********************************************************
+
+    [is_effect M] is 0 ⊑ M ⊑ I — the paper's assertion-formation check
+    (p.10), which Par-Comp-MP and Conseq both carry as a premise.  It is a
+    notion of the LOGIC, so it may not appear in SwapComplete.v;
+    Teleportation.v proves the same facts for itself, for the same reason.
+    Every matrix step they need is a lemma over there, so nothing is
+    computed here. *)
+
+(* SwapComplete's WF hints are not in scope without [Import]. *)
+#[local] Hint Resolve SwapComplete.WF_Corr SwapComplete.WF_EPR
+                      SwapComplete.WF_ZX  SwapComplete.WF_Psi0 : wf_db.
+
+Lemma lowner_refl : forall n (M : Square n), M ⊑ M.
+Proof. exact @SwapComplete.lowner_refl. Qed.
+
+Lemma herm_idem_effect : forall dim (M : Square (2 ^ dim)),
+    WF_Matrix M -> M† = M -> M × M = M -> is_effect (dim := dim) M.
+Proof.
+  intros dim M HW Hh Hi.
+  split; [ apply SwapComplete.herm_idem_psd; assumption |].
+  unfold lowner. apply SwapComplete.herm_idem_psd;
+    [ apply SwapComplete.compl_herm | apply SwapComplete.compl_idem ];
+    assumption.
+Qed.
+
+(* Every assertion of this case study is an AB-operator padded with I on
+   Charlie's two qubits, so this is the only effect check needed. *)
+Lemma is_effect_ab : forall C : Square 4,
+    WF_Matrix C -> C† = C -> C × C = C -> is_effect (dim := 4) (C ⊗ I 2 ⊗ I 2).
+Proof.
+  intros C WC Hh Hi.
+  apply herm_idem_effect;
+    [ apply SwapComplete.WF_ab | apply SwapComplete.ab_herm
+    | apply SwapComplete.ab_idem ]; assumption.
+Qed.
+
+Lemma is_effect_corr : forall u v,
+    is_effect (dim := 4) (SwapComplete.Corr u v ⊗ I 2 ⊗ I 2).
+Proof.
+  intros u v. apply is_effect_ab;
+    auto using SwapComplete.WF_Corr, SwapComplete.Corr_herm,
+               SwapComplete.Corr_idem.
+Qed.
+
+Lemma is_effect_epr : is_effect (dim := 4) (SwapComplete.EPR ⊗ I 2 ⊗ I 2).
+Proof.
+  apply is_effect_ab;
+    auto using SwapComplete.WF_EPR, SwapComplete.EPR_herm,
+               SwapComplete.EPR_idem.
+Qed.
+
 (** ** The assertions ************************************************
 
     Three quantum predicates, in the order the derivation meets them
@@ -250,13 +302,16 @@ Definition y1 : var := 4%nat.
 Definition y2 : var := 5%nat.
 
 Definition qCorr (a b : var) : qpred 4 :=
-  q_op (fun vs => Some (Corr (nth 0 vs 0%nat) (nth 1 vs 0%nat) ⊗ I 2 ⊗ I 2))
+  q_op (fun vs => Some (SwapComplete.Corr (nth 0 vs 0%nat) (nth 1 vs 0%nat)
+                          ⊗ I 2 ⊗ I 2))
        [e_var a; e_var b].
 
 Definition qCorrX (a : var) : qpred 4 :=
-  q_op (fun vs => Some (Corr 0 (nth 0 vs 0%nat) ⊗ I 2 ⊗ I 2)) [e_var a].
+  q_op (fun vs => Some (SwapComplete.Corr 0 (nth 0 vs 0%nat) ⊗ I 2 ⊗ I 2))
+       [e_var a].
 
-Definition qAB : qpred 4 := q_op (fun _ => Some (EPR ⊗ I 2 ⊗ I 2)) nil.
+Definition qAB : qpred 4 :=
+  q_op (fun _ => Some (SwapComplete.EPR ⊗ I 2 ⊗ I 2)) nil.
 
 (* Shaped so that (Axiom-Meas) applies on the nose: its postcondition must
    be literally (phi /\ x = y), so after the two rendezvous substitutions
@@ -385,8 +440,8 @@ Lemma ent_Z_fires :
   ⊨[Sig] wp_unitary (i_uu Sig Z ([A])) Qmid.
 Proof.
   ent_guard.
-  rewrite (corr_Z _ _ Hg).
-  rewrite padA_conj by auto with wf_db.
+  rewrite (SwapComplete.corr_Z _ _ Hg).
+  rewrite SwapComplete.padA_conj by auto with wf_db.
   apply lowner_refl.
 Qed.
 
@@ -395,7 +450,7 @@ Lemma ent_Z_skipped :
 Proof.
   ent_guard.
   apply negb_true_iff in Hg.
-  rewrite (corr_noZ _ _ Hg).
+  rewrite (SwapComplete.corr_noZ _ _ Hg).
   apply lowner_refl.
 Qed.
 
@@ -404,8 +459,8 @@ Lemma ent_X_fires :
   ⊨[Sig] wp_unitary (i_uu Sig X ([B])) (mk_assertion chi qAB).
 Proof.
   ent_guard.
-  rewrite (corr_X _ Hg).
-  rewrite padB_conj by auto with wf_db.
+  rewrite (SwapComplete.corr_X _ Hg).
+  rewrite SwapComplete.padB_conj by auto with wf_db.
   apply lowner_refl.
 Qed.
 
@@ -414,7 +469,7 @@ Lemma ent_X_skipped :
 Proof.
   ent_guard.
   apply negb_true_iff in Hg.
-  rewrite (corr_noX _ Hg).
+  rewrite (SwapComplete.corr_noX _ Hg).
   apply lowner_refl.
 Qed.
 
@@ -432,11 +487,11 @@ Proof.
   - intros s _ _; cbn; eexists; reflexivity.
   - intros s M N _ HM HN; cbn in HM, HN;
       inversion HM; inversion HN; subst.
-    rewrite !chain_eq
+    rewrite !SwapComplete.chain_eq
       by (auto using BellComplete.braket0_herm, BellComplete.braket1_herm,
                      BellComplete.braket00, BellComplete.braket11 with wf_db).
     rewrite Mplus_0_r.
-    exact swap_completeness.
+    exact SwapComplete.swap_completeness.
 Qed.
 
 Lemma ent_post :

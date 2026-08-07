@@ -32,14 +32,20 @@
 
 From Stdlib Require Import Arith.PeanoNat.
 From QuantumLib Require Import Matrix Quantum Pad VecSet CauchySchwarz.
-From Locqhl.Core Require Import Assertions.
 From Locqhl.CaseStudies Require BellComplete.
 
 Local Open Scope matrix_scope.
 
-(* ⊑ is Core's Löwner order, so that the case study can use this file's
-   theorem directly.  BellComplete's copy has the same body, which is what
-   lets its lemma apply below. *)
+(* The Löwner order, written exactly as in Locqhl.Core.Assertions — and as
+   in BellComplete.  Same body, so the three notions are definitionally
+   equal: this file states its theorem in its OWN terms and the case study
+   still closes its obligation by conversion.  That is what keeps the file
+   dependent on QuantumLib alone — no notion of the logic, in particular no
+   [is_effect], appears anywhere below. *)
+Definition lowner {n} (M N : Square n) : Prop :=
+  positive_semidefinite (N .+ (- C1) .* M)%M.
+
+Notation "M ⊑ N" := (lowner M N) (at level 70).
 
 (* ---- The entanglement-swapping matrices ---------------------------- *)
 
@@ -380,13 +386,14 @@ Proof.
   - exact Psi0_norm.
 Qed.
 
-(** ** What the case study's Conseq steps need at the matrix level ******
+(** ** The matrix side of the case study's Conseq steps ****************
 
-    Everything below is still pure QuantumLib arithmetic; it lives here so
-    that EntanglementSwapping.v contains nothing but the program, the
-    assertions, and the rule applications.                              *)
+    Still pure QuantumLib: the case study's own effect checks are two
+    applications of "hermitian and idempotent", and this is where that
+    arithmetic is done — [is_effect] itself is a notion of the logic and
+    stays in the case study.                                            *)
 
-(* ---- Effects -------------------------------------------------------- *)
+(* ---- Hermitian idempotents ------------------------------------------ *)
 
 Lemma lowner_refl : forall n (M : Square n), M ⊑ M.
 Proof.
@@ -403,36 +410,46 @@ Proof.
   rewrite E at 1. apply positive_semidefinite_AAadjoint.
 Qed.
 
-Lemma herm_idem_effect : forall dim (M : Square (2 ^ dim)),
-    WF_Matrix M -> M† = M -> M × M = M -> is_effect (dim := dim) M.
+(* I - M is again a hermitian idempotent — the half of "M is an effect"
+   that is not immediate. *)
+Lemma compl_herm : forall n (M : Square n),
+    M† = M -> (I n .+ (- C1) .* M)† = I n .+ (- C1) .* M.
 Proof.
-  intros dim M HW Hh Hi. split; [apply herm_idem_psd; assumption |].
-  unfold lowner. apply herm_idem_psd.
-  - rewrite Mplus_adjoint, Mscale_adj, id_adjoint_eq, Hh.
-    assert (Hc : Cconj (- C1) = - C1) by lca. rewrite Hc. reflexivity.
-  - rewrite Mmult_plus_distr_l, !Mmult_plus_distr_r.
-    Msimpl. rewrite Mscale_mult_dist_l, Mscale_mult_dist_r, Hi, Mscale_assoc. lma.
+  intros n M Hh.
+  rewrite Mplus_adjoint, Mscale_adj, id_adjoint_eq, Hh.
+  assert (Hc : Cconj (- C1) = - C1) by lca. rewrite Hc. reflexivity.
 Qed.
 
-(* Every assertion of this case study is an AB-operator padded with I on
-   Charlie's two qubits, so this is the only effect check needed. *)
-Lemma is_effect_ab : forall C : Square 4,
-    WF_Matrix C -> C† = C -> C × C = C -> is_effect (dim := 4) (C ⊗ I 2 ⊗ I 2).
+Lemma compl_idem : forall n (M : Square n),
+    WF_Matrix M -> M × M = M ->
+    (I n .+ (- C1) .* M) × (I n .+ (- C1) .* M) = I n .+ (- C1) .* M.
 Proof.
-  intros C WC Hh Hi. apply herm_idem_effect.
-  - restore_dims; auto with wf_db.
-  - restore_dims. rewrite !kron_adjoint, !id_adjoint_eq, Hh. reflexivity.
-  - restore_dims. rewrite !kron_mixed_product.
-    rewrite Mmult_1_l, Hi by auto with wf_db. reflexivity.
+  intros n M HW Hi.
+  rewrite Mmult_plus_distr_l, !Mmult_plus_distr_r.
+  Msimpl. rewrite Mscale_mult_dist_l, Mscale_mult_dist_r, Hi, Mscale_assoc. lma.
 Qed.
 
-Lemma is_effect_corr : forall u v, is_effect (dim := 4) (Corr u v ⊗ I 2 ⊗ I 2).
-Proof. intros u v. apply is_effect_ab; auto using Corr_herm, Corr_idem with wf_db. Qed.
+(* ---- The padded AB operator every assertion here denotes ------------- *)
 
-Lemma is_effect_epr : is_effect (dim := 4) (EPR ⊗ I 2 ⊗ I 2).
-Proof. apply is_effect_ab; auto using EPR_herm, EPR_idem with wf_db. Qed.
+Lemma WF_ab : forall C : Square 4, WF_Matrix C -> WF_Matrix (C ⊗ I 2 ⊗ I 2).
+Proof. intros C WC. restore_dims; auto with wf_db. Qed.
 
-(* ---- Conjugation --------------------------------------------------- *)
+Lemma ab_herm : forall C : Square 4,
+    WF_Matrix C -> C† = C -> (C ⊗ I 2 ⊗ I 2)† = C ⊗ I 2 ⊗ I 2.
+Proof.
+  intros C WC Hh. restore_dims.
+  rewrite !kron_adjoint, !id_adjoint_eq, Hh. reflexivity.
+Qed.
+
+Lemma ab_idem : forall C : Square 4,
+    WF_Matrix C -> C × C = C ->
+    (C ⊗ I 2 ⊗ I 2) × (C ⊗ I 2 ⊗ I 2) = C ⊗ I 2 ⊗ I 2.
+Proof.
+  intros C WC Hi. restore_dims. rewrite !kron_mixed_product.
+  rewrite Mmult_1_l, Hi by auto with wf_db. reflexivity.
+Qed.
+
+(* ---- Conjugation ---------------------------------------------------- *)
 
 (* Merge a two-layer conjugation into one. *)
 Lemma conj_merge : forall n (A B M : Square n),
