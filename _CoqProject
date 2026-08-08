@@ -50,3 +50,5 @@ CaseStudies/BellComplete.v
 CaseStudies/Teleportation.v
 CaseStudies/SwapComplete.v
 CaseStudies/EntanglementSwapping.v
+CaseStudies/NonlocalCNOTComplete.v
+CaseStudies/NonlocalCNOT.v
