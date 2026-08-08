@@ -18,4 +18,6 @@ core_development_notes.md
 rocq_mechanization_from_scratch.md
 
 # Paper PDFs copied in for reference (not part of the artifact)
+# Never commit anything under paper/
 paper/
+paper/**
