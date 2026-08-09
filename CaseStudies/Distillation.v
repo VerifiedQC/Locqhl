@@ -727,36 +727,40 @@ Proof.
   cbn [seq flat_map]. reflexivity.
 Qed.
 
-(** One round contributes one endpoint on [chA] and one on [chB]; filtering
-    a run of rounds by either channel keeps exactly the matching round's. *)
-Lemma filter_by_chA : forall (fa fb : nat -> caction) m s j0,
-    (forall j, caction_chan (fa j) = chA j) ->
-    (forall j, caction_chan (fb j) = chB j) ->
-    filter (fun a => Nat.eqb (caction_chan a) (chA j0))
-           (flat_map (fun j => [fa j; fb j]) (seq s m))
-    = if andb (Nat.leb s j0) (Nat.ltb j0 (s + m)) then [fa j0] else [].
+(** Counting a channel's endpoints, in two steps that are both blind to the
+    order inside a round's block — a [cblock] is unordered, and an earlier
+    version of this lemma wrongly baked "the chA endpoint comes first" into
+    its statement, which then did not fit Bob's leaf.
+
+    Step one: filtering distributes over the rounds.  Step two: a round
+    contributes to channel [c] only if it is the round that owns [c]. *)
+Lemma filter_flat_map : forall {A B} (p : B -> bool) (g : A -> list B) (l : list A),
+    filter p (flat_map g l) = flat_map (fun a => filter p (g a)) l.
 Proof.
-  intros fa fb m; induction m as [| m' IH]; intros s j0 Ha Hb.
+  intros A B p g l; induction l as [| a l IH]; cbn; [reflexivity |].
+  rewrite filter_app, IH. reflexivity.
+Qed.
+
+Lemma flat_map_pick : forall {B} (j0 : nat) (u : nat -> list B) m s,
+    flat_map (fun j => if Nat.eqb j j0 then u j else []) (seq s m)
+    = if andb (Nat.leb s j0) (Nat.ltb j0 (s + m)) then u j0 else [].
+Proof.
+  intros B j0 u m; induction m as [| m' IH]; intros s.
   - replace (Nat.leb s j0 && Nat.ltb j0 (s + 0))%bool with false;
       [ reflexivity |].
     destruct (Nat.leb s j0) eqn:E1; destruct (Nat.ltb j0 (s + 0)) eqn:E2;
       cbn; try reflexivity.
     apply Nat.leb_le in E1; apply Nat.ltb_lt in E2; lia.
-  - cbn [seq flat_map filter app]. rewrite Ha, Hb.
-    assert (HB : (chB s =? chA j0) = false)
-      by (apply Nat.eqb_neq; unfold chA, chB; lia).
-    rewrite HB. rewrite IH by assumption.
-    destruct (Nat.eqb (chA s) (chA j0)) eqn:E.
-    + apply Nat.eqb_eq in E; unfold chA in E.
-      assert (s = j0) by lia; subst.
+  - cbn [seq flat_map]. rewrite IH.
+    destruct (Nat.eqb s j0) eqn:E.
+    + apply Nat.eqb_eq in E; subst s.
       replace (Nat.leb j0 j0) with true by (symmetry; apply Nat.leb_le; lia).
       replace (Nat.ltb j0 (j0 + S m')) with true
         by (symmetry; apply Nat.ltb_lt; lia).
       replace (Nat.leb (S j0) j0) with false
         by (symmetry; apply Nat.leb_gt; lia).
-      reflexivity.
-    + apply Nat.eqb_neq in E; unfold chA in E.
-      assert (Hne : s <> j0) by lia. cbn [app].
+      cbn. apply app_nil_r.
+    + apply Nat.eqb_neq in E. cbn [app].
       destruct (Nat.leb s j0) eqn:E1; destruct (Nat.leb (S s) j0) eqn:E2;
         destruct (Nat.ltb j0 (s + S m')) eqn:E3;
         destruct (Nat.ltb j0 (S s + m')) eqn:E4; cbn; try reflexivity;
@@ -766,4 +770,139 @@ Proof.
                | H : Nat.ltb _ _ = true  |- _ => apply Nat.ltb_lt in H
                | H : Nat.ltb _ _ = false |- _ => apply Nat.ltb_ge in H
                end; lia.
+Qed.
+
+
+Lemma flat_map_ext : forall {A B} (f g : A -> list B) (l : list A),
+    (forall a, f a = g a) -> flat_map f l = flat_map g l.
+Proof.
+  intros A B f g l H; induction l as [| a l IH]; cbn; [reflexivity |].
+  rewrite H, IH; reflexivity.
+Qed.
+
+Lemma eqb_chA : forall j j0, (chA j =? chA j0) = (j =? j0).
+Proof.
+  intros j j0; unfold chA; destruct (Nat.eqb j j0) eqn:E.
+  - apply Nat.eqb_eq in E; subst; apply Nat.eqb_refl.
+  - apply Nat.eqb_neq in E; apply Nat.eqb_neq; lia.
+Qed.
+
+Lemma eqb_chB : forall j j0, (chB j =? chB j0) = (j =? j0).
+Proof.
+  intros j j0; unfold chB; destruct (Nat.eqb j j0) eqn:E.
+  - apply Nat.eqb_eq in E; subst; apply Nat.eqb_refl.
+  - apply Nat.eqb_neq in E; apply Nat.eqb_neq; lia.
+Qed.
+
+Lemma eqb_chBA : forall j j0, (chB j =? chA j0) = false.
+Proof. intros; apply Nat.eqb_neq; unfold chA, chB; lia. Qed.
+
+Lemma eqb_chAB : forall j j0, (chA j =? chB j0) = false.
+Proof. intros; apply Nat.eqb_neq; unfold chA, chB; lia. Qed.
+
+Ltac in_range j0 n :=
+  replace (Nat.leb 0 j0) with true by (symmetry; apply Nat.leb_le; lia);
+  replace (Nat.ltb j0 (0 + S n)) with true
+    by (symmetry; apply Nat.ltb_lt; lia).
+
+(** Both endpoints of [chA j0] — Alice's output and Bob's input — and
+    nothing else.  The two leaves are handled by the same two lemmas even
+    though Bob writes his block the other way round. *)
+Lemma endpoints_chA : forall n j0, (j0 <= n)%nat ->
+    filter (fun a => Nat.eqb (caction_chan a) (chA j0)) (program_actions (distill n))
+    = [ chA j0 ‼ e_var ma ; chA j0 ⁇ y ].
+Proof.
+  intros n j0 Hj. unfold program_actions. rewrite distill_leaves.
+  cbn [row_flat]. rewrite filter_app, actions_proc_a, actions_proc_b.
+  rewrite !filter_flat_map.
+  rewrite (flat_map_ext _ (fun j => if Nat.eqb j j0 then [chA j ‼ e_var ma] else []))
+    by (intro j; cbn [filter caction_chan]; rewrite eqb_chA, eqb_chBA;
+        destruct (Nat.eqb j j0); reflexivity).
+  rewrite (flat_map_ext (fun a => filter _ _)
+                        (fun j => if Nat.eqb j j0 then [chA j ⁇ y] else []))
+    by (intro j; cbn [filter caction_chan]; rewrite eqb_chA, eqb_chBA;
+        destruct (Nat.eqb j j0); reflexivity).
+  rewrite !flat_map_pick. in_range j0 n. reflexivity.
+Qed.
+
+Lemma endpoints_chB : forall n j0, (j0 <= n)%nat ->
+    filter (fun a => Nat.eqb (caction_chan a) (chB j0)) (program_actions (distill n))
+    = [ chB j0 ⁇ x ; chB j0 ‼ e_var mb ].
+Proof.
+  intros n j0 Hj. unfold program_actions. rewrite distill_leaves.
+  cbn [row_flat]. rewrite filter_app, actions_proc_a, actions_proc_b.
+  rewrite !filter_flat_map.
+  rewrite (flat_map_ext _ (fun j => if Nat.eqb j j0 then [chB j ⁇ x] else []))
+    by (intro j; cbn [filter caction_chan]; rewrite eqb_chB, eqb_chAB;
+        destruct (Nat.eqb j j0); reflexivity).
+  rewrite (flat_map_ext (fun a => filter _ _)
+                        (fun j => if Nat.eqb j j0 then [chB j ‼ e_var mb] else []))
+    by (intro j; cbn [filter caction_chan]; rewrite eqb_chB, eqb_chAB;
+        destruct (Nat.eqb j j0); reflexivity).
+  rewrite !flat_map_pick. in_range j0 n. reflexivity.
+Qed.
+
+Lemma chan_range : forall n c, In c (program_chan (distill n)) ->
+    exists j0, (j0 <= n)%nat /\ (c = chA j0 \/ c = chB j0).
+Proof.
+  intros n c Hc. rewrite program_chan_actions in Hc.
+  apply in_map_iff in Hc. destruct Hc as [a [Hca Ha]].
+  unfold program_actions in Ha. rewrite distill_leaves in Ha.
+  cbn [row_flat] in Ha. rewrite actions_proc_a, actions_proc_b in Ha.
+  apply in_app_or in Ha; destruct Ha as [Ha | Ha];
+    apply in_flat_map in Ha; destruct Ha as [j [Hj Ha]];
+    apply in_seq in Hj;
+    exists j; split; try lia;
+    destruct Ha as [Ha | [Ha | []]]; subst a;
+    cbn [caction_chan] in Hca; subst c;
+    [ left | right | right | left ]; reflexivity.
+Qed.
+
+Lemma in_chan_a : forall n j0, (j0 <= n)%nat ->
+    In (chA j0) (process_chan (proc_a n)) /\ In (chB j0) (process_chan (proc_a n)).
+Proof.
+  intros n j0 Hj. rewrite process_chan_actions, actions_proc_a.
+  split; [ apply in_map_iff; exists (chA j0 ‼ e_var ma)
+         | apply in_map_iff; exists (chB j0 ⁇ x) ];
+    (split; [ reflexivity |]);
+    apply in_flat_map; exists j0; (split; [ apply in_seq; lia |]);
+    cbn; tauto.
+Qed.
+
+Lemma in_chan_b : forall n j0, (j0 <= n)%nat ->
+    In (chA j0) (process_chan (proc_b n)) /\ In (chB j0) (process_chan (proc_b n)).
+Proof.
+  intros n j0 Hj. rewrite process_chan_actions, actions_proc_b.
+  split; [ apply in_map_iff; exists (chA j0 ⁇ y)
+         | apply in_map_iff; exists (chB j0 ‼ e_var mb) ];
+    (split; [ reflexivity |]);
+    apply in_flat_map; exists j0; (split; [ apply in_seq; lia |]);
+    cbn; tauto.
+Qed.
+
+Lemma wf_channels_distill : forall n, wf_channels (distill n).
+Proof.
+  intros n c Hc.
+  destruct (chan_range n c Hc) as [j0 [Hj [-> | ->]]];
+    unfold endpoints_of;
+    [ rewrite endpoints_chA by exact Hj | rewrite endpoints_chB by exact Hj ];
+    (split; [ reflexivity | split; [ reflexivity |]]);
+    unfold parties; rewrite distill_leaves; cbn [row_parties];
+    destruct (in_chan_a n j0 Hj) as [Ha1 Ha2];
+    destruct (in_chan_b n j0 Hj) as [Hb1 Hb2];
+    repeat match goal with
+           | |- context[existsb (Nat.eqb ?c) ?l] =>
+               replace (existsb (Nat.eqb c) l) with true
+                 by (symmetry; apply existsb_exists; exists c;
+                     split; [ assumption | apply Nat.eqb_refl ])
+           end; reflexivity.
+Qed.
+
+Lemma wf_program_distill : forall n, wf_program (distill n).
+Proof.
+  intro n. split; [| split; [| split]].
+  - exact (wf_ownership_distill n).
+  - exact (wf_channels_distill n).
+  - exact (wf_phase_aligned_distill n).
+  - exact (wf_phase_independence_distill n).
 Qed.
