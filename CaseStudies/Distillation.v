@@ -13,7 +13,9 @@
 
 From Stdlib Require Import Lists.List.
 From Stdlib Require Import Arith.PeanoNat.
-From Locqhl.Core Require Import Syntax Rules.
+From Stdlib Require Import micromega.Lia.
+From Locqhl.Core Require Import Syntax Names QuantumActions Semantics
+                                Assertions WellFormed Rules SoundnessFacts Soundness.
 Import ListNotations.
 
 Local Open Scope com_scope.
@@ -183,7 +185,6 @@ Proof. split; reflexivity. Qed.
 (** ** The Bell-label predicates (paper §5.4.1) ************************ *)
 
 From QuantumLib Require Import Matrix Quantum Pad.
-From Locqhl.Core Require Import Assertions.
 
 Local Open Scope matrix_scope.
 
@@ -269,3 +270,500 @@ Definition distill_pre (k n : nat) : assertion (4 * S n) :=
 Definition distill_post (k n : nat) : assertion (4 * S n) :=
   {| classical_part := Acc k;
      quantum_part   := q_op (fun _ => Some (post_q k n)) nil |}.
+
+(** ** The interpretation ********************************************* *)
+
+(** The protocol uses one gate and one measurement, at every round.  Off
+    pattern the operator is the identity; [pad_ctrl]/[pad_u] already return
+    [Zero] when an index is out of range, so nothing here needs a bound. *)
+Definition d_uu (n : nat) (U : usym) (qs : list qvar)
+  : Square (2 ^ (4 * S n)) :=
+  match U, qs with
+  | 0%nat, a :: b :: nil => pad_ctrl (4 * S n) a b σx     (* CNOT *)
+  | _, _                 => I (2 ^ (4 * S n))
+  end.
+
+(* Outside the outcome set T_M = {0,1} the operator is Zero — what
+   [wf_interp] (the paper's finite family {M_m}) demands. *)
+Definition d_mm (n : nat) (M : msym) (qs : list qvar) : measurement (4 * S n) :=
+  match qs with
+  | a :: nil => (0%nat :: 1%nat :: nil,
+                 fun m => if Nat.eqb m 0%nat then pad_u (4 * S n) a ∣0⟩⟨0∣
+                          else if Nat.eqb m 1%nat then pad_u (4 * S n) a ∣1⟩⟨1∣
+                          else Zero)
+  | _        => (0%nat :: nil,
+                 fun m => if Nat.eqb m 0%nat then I (2 ^ (4 * S n)) else Zero)
+  end.
+
+Definition d_rl (R : relsym) (args : list val) : bool :=
+  match R, args with
+  | 0%nat, a :: b :: nil => Nat.eqb a b            (* r_eq *)
+  | 1%nat, a :: b :: nil => Nat.ltb a b            (* r_lt *)
+  | 2%nat, a :: b :: nil => Nat.ltb b a            (* r_gt *)
+  | _, _                 => false
+  end.
+
+Definition Sig (n : nat) : interp (4 * S n) :=
+  {| i_fn := fun _ _ => 0%nat;
+     i_rl := d_rl;
+     i_uu := d_uu n;
+     i_mm := d_mm n |}.
+
+Lemma HR : forall n, standard_rels (Sig n).
+Proof. intro n; repeat split; reflexivity. Qed.
+
+Lemma HCNOT : forall n a b, i_uu (Sig n) CNOT ([a; b]) = pad_ctrl (4 * S n) a b σx.
+Proof. reflexivity. Qed.
+
+(** Every operator [Sig n] hands out is a padding of a one- or two-qubit
+    gate at the very qubits the primitive names, which is what makes it
+    LOCAL — the premise Par-Disjoint-MP needs.  The proofs are the same
+    case splits as in the fixed-dimension case studies: the dimension is
+    symbolic but never inspected. *)
+Lemma d_padded : forall n K qs, acts_on (Sig n) K qs -> padded K qs.
+Proof.
+  intros n K qs H; destruct H as [U qs' | M qs' m | q | q].
+  - unfold Sig, d_uu; cbn [i_uu].
+    destruct U as [|U]; destruct qs' as [|a [|b [|c qs']]]; cbn;
+      constructor; auto with wf_db.
+  - unfold Sig, d_mm; cbn [i_mm snd].
+    destruct qs' as [|a [|b qs']]; cbn;
+      repeat match goal with
+             | |- padded (if ?x then _ else _) _ => destruct x
+             end;
+      constructor; auto with wf_db.
+  - constructor; auto with wf_db.
+  - constructor; auto with wf_db.
+Qed.
+
+Lemma d_local_ops : forall n, local_ops (Sig n).
+Proof.
+  intros n K1 qs1 K2 qs2 H1 H2 Hd.
+  eapply padded_commute; eauto using d_padded.
+Qed.
+
+Lemma d_wf_interp : forall n, wf_interp (Sig n).
+Proof.
+  intro n. split; [| split; [| split; [| split]]].
+  - intros U qs. unfold Sig, d_uu; cbn [i_uu].
+    destruct U as [|U]; destruct qs as [|a [|b [|c qs]]]; cbn;
+      auto with wf_db;
+      try (apply (WF_pad_ctrl (4 * S n)); auto with wf_db).
+  - intros M qs m. unfold Sig, d_mm; cbn [i_mm].
+    destruct qs as [|a [|b qs]]; cbn;
+      repeat match goal with |- WF_Matrix (if ?x then _ else _) => destruct x end;
+      auto with wf_db; try (apply (WF_pad_u (4 * S n)); auto with wf_db).
+  - intros M qs m Hm. unfold Sig, d_mm in *; cbn [i_mm] in *.
+    destruct qs as [|a [|b qs]]; cbn in *;
+      repeat match goal with
+             | |- (if ?x then _ else _) = _ => destruct x eqn:?
+             end;
+      try reflexivity;
+      repeat match goal with
+             | E : Nat.eqb _ _ = true |- _ => apply Nat.eqb_eq in E; subst
+             end;
+      exfalso; apply Hm; cbn; auto.
+  - intros M qs. unfold Sig, d_mm; cbn [i_mm].
+    destruct qs as [|a [|b qs]]; cbn;
+      repeat constructor; cbn; intuition congruence.
+  - exact (d_local_ops n).
+Qed.
+
+(** ** Paper Theorem 5.4, the acceptance triple ***********************
+
+    For a run whose FIRST accepting round is [k]: if the input sits where
+    rounds [0..k-1] fail the bilateral test and round [k] passes it, then
+    the protocol terminates with both parties latched on index [k+1], the
+    already-rejected rounds in the NeqSub frame and round [k] in EqSub.
+
+    This is the [acc] half of Theorem 5.4.  The [good] half replaces
+    [Pass]/[EqSub] by [Good_k]/[Φ00] and is not stated yet.
+
+    Nothing merges the [k]'s: the quantum postcondition depends on [k], so
+    Branch-Accum — which needs one postcondition shared across the family —
+    does not apply.  The paper does not merge them either; the k's meet
+    only in the Werner-input evaluation, which is arithmetic, not a rule. *)
+Theorem distillation_acc : forall (k n : nat), (k <= n)%nat ->
+  Sig n ⊨ {{ distill_pre k n }} distill n {{ distill_post k n }}.
+Admitted.
+
+(** ** The three phases of the derivation ******************************
+
+    [tround i r] begins with round [i]'s ACCEPT TEST — the test sits in the
+    local block of phase [i+1], not phase [i].  So an invariant handed to
+    [tround i _] has to say enough for the guard [ma = x /\ da = 0] to be
+    decided, and the three regimes of Distillation.md differ exactly there:
+
+      i < k   the guard is false (the outcomes disagreed), nothing latches
+      i = k   the guard is true, both parties latch on index k+1
+      i > k   [da] is already 1, so the guard is false whatever the bits
+
+    Round [i]'s probe has already run when [tround i _] is entered, so
+    round [i] has collapsed: rounds [0..i] carry the post-measurement
+    frame, rounds [i+1..k-1] still carry the pre-effect [Rej], round [k]
+    carries [Pass], and the rest are free. *)
+
+Definition Zeros : formula :=
+  f_and (f_and (f_and (f_eq (e_var da) (e_val 0%nat)) (f_eq (e_var db) (e_val 0%nat)))
+               (f_and (f_eq (e_var oa) (e_val 0%nat)) (f_eq (e_var ob) (e_val 0%nat))))
+        (f_and (f_eq (e_var ia) (e_val 0%nat)) (f_eq (e_var ib) (e_val 0%nat))).
+
+Definition Disagree : formula :=
+  f_and (f_not (f_eq (e_var ma) (e_var x))) (f_not (f_eq (e_var mb) (e_var y))).
+Definition Agree : formula :=
+  f_and (f_eq (e_var ma) (e_var x)) (f_eq (e_var mb) (e_var y)).
+
+(** [j] rounds have been measured and rejected; rounds [j..k-1] are still
+    to come and will reject; round [k] will pass.  [inv_q 0 k n] is
+    [pre_q k n] up to the unit factor [kron_n 0 _ = I 1]. *)
+Definition inv_q (j k n : nat) : Square (2 ^ (4 * S n)) :=
+  kron_n j NeqSub ⊗ kron_n (k - j) Rej ⊗ Pass ⊗ kron_n (n - k) (I 16).
+
+Definition inv_at (j k n : nat) : assertion (4 * S n) :=
+  {| classical_part := f_and Zeros Disagree;
+     quantum_part   := q_op (fun _ => Some (inv_q j k n)) nil |}.
+
+Definition acc_at (k n : nat) : assertion (4 * S n) :=
+  {| classical_part := f_and Zeros Agree;
+     quantum_part   := q_op (fun _ => Some (post_q k n)) nil |}.
+
+(** i > k.  [da = 1], so every remaining accept test takes its else branch,
+    and every remaining probe acts on a round the postcondition leaves
+    free — the weakest precondition of [I] under a unitary is [I], and
+    under a measurement it is [Σ_m M_m† M_m = I].  Induction on [r], with
+    [i] generalised so the step can instantiate the hypothesis at [S i]. *)
+Lemma phase_after : forall n k r i,
+    Sig n ⊢ₚ {{ distill_post k n }} tround i r {{ distill_post k n }}.
+Admitted.
+
+(** i = k.  One [Par-Comp-MP] step: the accept test fires, turning
+    [Zeros /\ Agree] into [Acc k] and leaving the quantum part alone; the
+    rest is [phase_after]. *)
+Lemma phase_accept : forall n k, (k <= n)%nat ->
+    Sig n ⊢ₚ {{ acc_at k n }} tround k (n - k) {{ distill_post k n }}.
+Admitted.
+
+(** i < k.  Induction on [d], the number of rejecting rounds still to come;
+    [i + S d = k] ties it to the round index, because [k - i] is not
+    structurally decreasing and [induction] will not take it. *)
+Lemma phase_reject : forall n k d i,
+    (k <= n)%nat -> (S i + d = k)%nat ->
+    Sig n ⊢ₚ {{ inv_at (S i) k n }} tround i (n - i) {{ distill_post k n }}.
+Admitted.
+
+(** ** Well-formedness of the program (Definition 2.1) *****************
+
+    Four obligations, each an induction over the rounds.  The recurring
+    shape: a leaf's k-th communication block is round [k]'s rendezvous pair
+    when [k] is in range and empty otherwise, and every other footprint is
+    a [flat_map] over the rounds. *)
+
+Lemma comm_at_alice : forall r i k,
+    comm_at (alice i r) k
+    = if Nat.ltb k r then [ chA (S i + k) ‼ e_var ma ; chB (S i + k) ⁇ x ]
+      else [].
+Proof.
+  induction r as [| r' IH]; intros i k.
+  - destruct k; cbn [alice comm_at Nat.ltb Nat.leb]; reflexivity.
+  - destruct k as [| k'].
+    + cbn [alice comm_at Nat.ltb Nat.leb]. rewrite Nat.add_0_r. reflexivity.
+    + cbn [alice comm_at Nat.ltb Nat.leb]. rewrite IH.
+      replace (S i + S k')%nat with (S (S i) + k')%nat by lia.
+      reflexivity.
+Qed.
+
+Lemma comm_at_bob : forall r i k,
+    comm_at (bob i r) k
+    = if Nat.ltb k r then [ chB (S i + k) ‼ e_var mb ; chA (S i + k) ⁇ y ]
+      else [].
+Proof.
+  induction r as [| r' IH]; intros i k.
+  - destruct k; cbn [bob comm_at Nat.ltb Nat.leb]; reflexivity.
+  - destruct k as [| k'].
+    + cbn [bob comm_at Nat.ltb Nat.leb]. rewrite Nat.add_0_r. reflexivity.
+    + cbn [bob comm_at Nat.ltb Nat.leb]. rewrite IH.
+      replace (S i + S k')%nat with (S (S i) + k')%nat by lia.
+      reflexivity.
+Qed.
+
+(** The two leaves, named so the phase lemmas can talk about them. *)
+Definition proc_a (n : nat) : process :=
+  head_a ⨾ ([ chA 0 ‼ e_var ma ; chB 0 ⁇ x ]) ⨾ alice 0 n.
+Definition proc_b (n : nat) : process :=
+  head_b ⨾ ([ chB 0 ‼ e_var mb ; chA 0 ⁇ y ]) ⨾ bob 0 n.
+
+Lemma distill_leaves : forall n, distill n = ⟨ proc_a n ⟩ ∥ ⟨ proc_b n ⟩.
+Proof. reflexivity. Qed.
+
+(** Folding round 0 back in: a leaf's k-th block is round [k]'s rendezvous
+    pair exactly when [k <= n].  [Nat.ltb k' n] and [Nat.leb (S k') n] are
+    the same term, which is why the successor case closes by [reflexivity]. *)
+Lemma comm_at_a : forall n k,
+    comm_at (proc_a n) k
+    = if Nat.leb k n then [ chA k ‼ e_var ma ; chB k ⁇ x ] else [].
+Proof.
+  intros n k. destruct k as [| k'].
+  - reflexivity.
+  - cbn [proc_a comm_at]. rewrite comm_at_alice.
+    replace (S 0 + k')%nat with (S k') by lia. reflexivity.
+Qed.
+
+Lemma comm_at_b : forall n k,
+    comm_at (proc_b n) k
+    = if Nat.leb k n then [ chB k ‼ e_var mb ; chA k ⁇ y ] else [].
+Proof.
+  intros n k. destruct k as [| k'].
+  - reflexivity.
+  - cbn [proc_b comm_at]. rewrite comm_at_bob.
+    replace (S 0 + k')%nat with (S k') by lia. reflexivity.
+Qed.
+
+Lemma phase_actions_distill : forall n k,
+    phase_actions (distill n) k
+    = if Nat.leb k n
+      then [ chA k ‼ e_var ma ; chB k ⁇ x ; chB k ‼ e_var mb ; chA k ⁇ y ]
+      else [].
+Proof.
+  intros n k. unfold phase_actions, phase_at, phase_row.
+  rewrite distill_leaves. cbn [row_map row_leaves concat].
+  rewrite comm_at_a, comm_at_b.
+  destruct (Nat.leb k n); reflexivity.
+Qed.
+
+(** The two channels of a round are distinct: [chA k = 2k] is even and
+    [chB k = 2k+1] is odd. *)
+Lemma chAB_neq : forall k, chA k <> chB k.
+Proof. intros k; unfold chA, chB; lia. Qed.
+
+Lemma wf_phase_aligned_distill : forall n, wf_phase_aligned (distill n).
+Proof.
+  intros n k c Hin. rewrite phase_actions_distill in *.
+  destruct (Nat.leb k n) eqn:Hk; [| cbn in Hin; contradiction].
+  cbn [map caction_chan] in Hin.
+  assert (HA : (chB k =? chA k) = false)
+    by (apply Nat.eqb_neq; intro H; apply (chAB_neq k); symmetry; exact H).
+  assert (HB : (chA k =? chB k) = false)
+    by (apply Nat.eqb_neq; apply chAB_neq).
+  destruct Hin as [Hc|[Hc|[Hc|[Hc|[]]]]]; rewrite <- Hc;
+    cbn [filter caction_chan]; rewrite ?Nat.eqb_refl, ?HA, ?HB; reflexivity.
+Qed.
+
+Lemma wf_phase_independence_distill : forall n, wf_phase_independence (distill n).
+Proof.
+  intros n k. unfold recv_targets, output_reads, phase_at, phase_row.
+  rewrite distill_leaves. cbn [row_map row_leaves].
+  rewrite comm_at_a, comm_at_b.
+  destruct (Nat.leb k n); split;
+    solve [ vm_compute; repeat constructor; cbn; intuition congruence
+          | intros v Hv Hw; vm_compute in Hv, Hw; intuition congruence
+          | vm_compute; constructor
+          | intros v Hv; vm_compute in Hv; contradiction ].
+Qed.
+
+(** Ownership.  Alice's classical variables are 0..4 and Bob's 5..9, so
+    the two classical footprints are separated by a numeric bound; her
+    qubits are [Ak j = 4j] and [At j = 4j+2] and his are [Bk j = 4j+1] and
+    [Bt j = 4j+3], so the two quantum footprints are separated by parity.
+    Both are read off the round structure by induction. *)
+
+Ltac vbound :=
+  repeat (match goal with
+          | H : _ \/ _ |- _ =>
+              destruct H as [H | H];
+              [ subst; cbv [ia da oa ma x ib db ob mb y]; lia |]
+          end).
+
+Lemma alice_change : forall r i v, In v (process_change (alice i r)) -> (v < 5)%nat.
+Proof.
+  induction r as [| r' IH]; intros i v Hv; cbn in Hv; vbound.
+  - contradiction.
+  - exact (IH _ _ Hv).
+Qed.
+
+Lemma alice_read : forall r i v, In v (process_read (alice i r)) -> (v < 5)%nat.
+Proof.
+  induction r as [| r' IH]; intros i v Hv; cbn in Hv; vbound.
+  - contradiction.
+  - exact (IH _ _ Hv).
+Qed.
+
+Lemma bob_change : forall r i v, In v (process_change (bob i r)) -> (5 <= v < 10)%nat.
+Proof.
+  induction r as [| r' IH]; intros i v Hv; cbn in Hv; vbound.
+  - contradiction.
+  - exact (IH _ _ Hv).
+Qed.
+
+Lemma bob_read : forall r i v, In v (process_read (bob i r)) -> (5 <= v < 10)%nat.
+Proof.
+  induction r as [| r' IH]; intros i v Hv; cbn in Hv; vbound.
+  - contradiction.
+  - exact (IH _ _ Hv).
+Qed.
+
+Lemma ab_qvar_neq : forall qa qb,
+    (exists j, qa = Ak j \/ qa = At j) ->
+    (exists j, qb = Bk j \/ qb = Bt j) -> qa <> qb.
+Proof.
+  intros qa qb [ja Ha] [jb Hb]. unfold Ak, At, Bk, Bt in *.
+  destruct Ha; destruct Hb; subst; lia.
+Qed.
+
+Lemma alice_qvar : forall r i q, In q (process_qvar (alice i r)) ->
+    exists j, q = Ak j \/ q = At j.
+Proof.
+  induction r as [| r' IH]; intros i q Hq;
+    cbn [alice process_qvar residual_qvar lblock_qvar accept_a mid_a app] in Hq.
+  - contradiction.
+  - destruct Hq as [Hq | [Hq | [Hq | Hq]]];
+      [ exists (S i); left  | exists (S i); right | exists (S i); right
+      | exact (IH _ _ Hq) ]; symmetry; exact Hq.
+Qed.
+
+Lemma bob_qvar : forall r i q, In q (process_qvar (bob i r)) ->
+    exists j, q = Bk j \/ q = Bt j.
+Proof.
+  induction r as [| r' IH]; intros i q Hq;
+    cbn [bob process_qvar residual_qvar lblock_qvar accept_b mid_b app] in Hq.
+  - contradiction.
+  - destruct Hq as [Hq | [Hq | [Hq | Hq]]];
+      [ exists (S i); left  | exists (S i); right | exists (S i); right
+      | exact (IH _ _ Hq) ]; symmetry; exact Hq.
+Qed.
+
+Lemma proc_a_qvar : forall n q, In q (process_qvar (proc_a n)) ->
+    exists j, q = Ak j \/ q = At j.
+Proof.
+  intros n q Hq;
+    cbn [proc_a process_qvar residual_qvar lblock_qvar head_a app] in Hq.
+  destruct Hq as [Hq | [Hq | [Hq | Hq]]];
+    [ exists 0%nat; left | exists 0%nat; right | exists 0%nat; right
+    | exact (alice_qvar _ _ _ Hq) ]; symmetry; exact Hq.
+Qed.
+
+Lemma proc_b_qvar : forall n q, In q (process_qvar (proc_b n)) ->
+    exists j, q = Bk j \/ q = Bt j.
+Proof.
+  intros n q Hq;
+    cbn [proc_b process_qvar residual_qvar lblock_qvar head_b app] in Hq.
+  destruct Hq as [Hq | [Hq | [Hq | Hq]]];
+    [ exists 0%nat; left | exists 0%nat; right | exists 0%nat; right
+    | exact (bob_qvar _ _ _ Hq) ]; symmetry; exact Hq.
+Qed.
+
+Lemma proc_a_cvar : forall n v, In v (process_cvar (proc_a n)) -> (v < 5)%nat.
+Proof.
+  intros n v Hv. unfold process_cvar in Hv. apply in_app_or in Hv.
+  destruct Hv as [Hv | Hv]; cbn in Hv; vbound;
+    [ exact (alice_change _ _ _ Hv) | exact (alice_read _ _ _ Hv) ].
+Qed.
+
+Lemma proc_b_cvar : forall n v, In v (process_cvar (proc_b n)) -> (5 <= v < 10)%nat.
+Proof.
+  intros n v Hv. unfold process_cvar in Hv. apply in_app_or in Hv.
+  destruct Hv as [Hv | Hv]; cbn in Hv; vbound;
+    [ exact (bob_change _ _ _ Hv) | exact (bob_read _ _ _ Hv) ].
+Qed.
+
+Lemma proc_a_change : forall n v, In v (process_change (proc_a n)) -> (v < 5)%nat.
+Proof.
+  intros n v Hv; cbn in Hv; vbound; exact (alice_change _ _ _ Hv).
+Qed.
+
+Lemma proc_b_change : forall n v, In v (process_change (proc_b n)) -> (5 <= v < 10)%nat.
+Proof.
+  intros n v Hv; cbn in Hv; vbound; exact (bob_change _ _ _ Hv).
+Qed.
+
+Lemma wf_ownership_distill : forall n, wf_ownership (distill n).
+Proof.
+  intro n. rewrite distill_leaves. cbn [wf_ownership].
+  split; [exact Logic.I | split; [exact Logic.I |]].
+  unfold cross_disjoint, program_change, program_cvar, program_qvar.
+  cbn [row_flat].
+  split; [| split].
+  - intros v Hv Hw.
+    pose proof (proc_a_change n v Hv); pose proof (proc_b_cvar n v Hw). lia.
+  - intros v Hv Hw.
+    pose proof (proc_b_change n v Hv); pose proof (proc_a_cvar n v Hw). lia.
+  - intros q Hq Hw.
+    exact (ab_qvar_neq q q (proc_a_qvar n q Hq) (proc_b_qvar n q Hw) eq_refl).
+Qed.
+
+(** Channels.  A leaf's action list is a [flat_map] over its rounds, so a
+    channel's endpoints are counted by one induction over [seq].  [chA j]
+    is even and [chB j] odd, which is what makes the count exactly one on
+    each side. *)
+
+Lemma actions_alice : forall r i,
+    process_actions (alice i r)
+    = flat_map (fun j => [ chA j ‼ e_var ma ; chB j ⁇ x ]) (seq (S i) r).
+Proof.
+  induction r as [| r' IH]; intros i; [ reflexivity |].
+  cbn [alice process_actions seq flat_map]. rewrite IH. reflexivity.
+Qed.
+
+Lemma actions_bob : forall r i,
+    process_actions (bob i r)
+    = flat_map (fun j => [ chB j ‼ e_var mb ; chA j ⁇ y ]) (seq (S i) r).
+Proof.
+  induction r as [| r' IH]; intros i; [ reflexivity |].
+  cbn [bob process_actions seq flat_map]. rewrite IH. reflexivity.
+Qed.
+
+Lemma actions_proc_a : forall n,
+    process_actions (proc_a n)
+    = flat_map (fun j => [ chA j ‼ e_var ma ; chB j ⁇ x ]) (seq 0 (S n)).
+Proof.
+  intro n. cbn [proc_a process_actions]. rewrite actions_alice.
+  cbn [seq flat_map]. reflexivity.
+Qed.
+
+Lemma actions_proc_b : forall n,
+    process_actions (proc_b n)
+    = flat_map (fun j => [ chB j ‼ e_var mb ; chA j ⁇ y ]) (seq 0 (S n)).
+Proof.
+  intro n. cbn [proc_b process_actions]. rewrite actions_bob.
+  cbn [seq flat_map]. reflexivity.
+Qed.
+
+(** One round contributes one endpoint on [chA] and one on [chB]; filtering
+    a run of rounds by either channel keeps exactly the matching round's. *)
+Lemma filter_by_chA : forall (fa fb : nat -> caction) m s j0,
+    (forall j, caction_chan (fa j) = chA j) ->
+    (forall j, caction_chan (fb j) = chB j) ->
+    filter (fun a => Nat.eqb (caction_chan a) (chA j0))
+           (flat_map (fun j => [fa j; fb j]) (seq s m))
+    = if andb (Nat.leb s j0) (Nat.ltb j0 (s + m)) then [fa j0] else [].
+Proof.
+  intros fa fb m; induction m as [| m' IH]; intros s j0 Ha Hb.
+  - replace (Nat.leb s j0 && Nat.ltb j0 (s + 0))%bool with false;
+      [ reflexivity |].
+    destruct (Nat.leb s j0) eqn:E1; destruct (Nat.ltb j0 (s + 0)) eqn:E2;
+      cbn; try reflexivity.
+    apply Nat.leb_le in E1; apply Nat.ltb_lt in E2; lia.
+  - cbn [seq flat_map filter app]. rewrite Ha, Hb.
+    assert (HB : (chB s =? chA j0) = false)
+      by (apply Nat.eqb_neq; unfold chA, chB; lia).
+    rewrite HB. rewrite IH by assumption.
+    destruct (Nat.eqb (chA s) (chA j0)) eqn:E.
+    + apply Nat.eqb_eq in E; unfold chA in E.
+      assert (s = j0) by lia; subst.
+      replace (Nat.leb j0 j0) with true by (symmetry; apply Nat.leb_le; lia).
+      replace (Nat.ltb j0 (j0 + S m')) with true
+        by (symmetry; apply Nat.ltb_lt; lia).
+      replace (Nat.leb (S j0) j0) with false
+        by (symmetry; apply Nat.leb_gt; lia).
+      reflexivity.
+    + apply Nat.eqb_neq in E; unfold chA in E.
+      assert (Hne : s <> j0) by lia. cbn [app].
+      destruct (Nat.leb s j0) eqn:E1; destruct (Nat.leb (S s) j0) eqn:E2;
+        destruct (Nat.ltb j0 (s + S m')) eqn:E3;
+        destruct (Nat.ltb j0 (S s + m')) eqn:E4; cbn; try reflexivity;
+        repeat match goal with
+               | H : Nat.leb _ _ = true  |- _ => apply Nat.leb_le in H
+               | H : Nat.leb _ _ = false |- _ => apply Nat.leb_gt in H
+               | H : Nat.ltb _ _ = true  |- _ => apply Nat.ltb_lt in H
+               | H : Nat.ltb _ _ = false |- _ => apply Nat.ltb_ge in H
+               end; lia.
+Qed.
