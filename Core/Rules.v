@@ -305,16 +305,8 @@ Proof.
     rewrite !app_assoc. apply Permutation_app_tail, Permutation_app_comm.
 Qed.
 
-Lemma program_chan_actions : forall P,
-    program_chan P = map caction_chan (program_actions P).
-Proof.
-  unfold program_chan, program_actions;
-    induction P as [S0 | P1 IH1 P2 IH2]; cbn [row_flat].
-  - induction S0 as [| R K T IH]; cbn [process_chan process_actions];
-      [reflexivity |].
-    unfold cblock_chan; rewrite map_app, IH; reflexivity.
-  - rewrite map_app, IH1, IH2; reflexivity.
-Qed.
+(* program_chan_actions is inherited from WellFormed (identical statement);
+   the local re-derivation was redundant. *)
 
 Lemma krow_chan_actions' : forall k,
     krow_chan k = map caction_chan (krow_actions k).
