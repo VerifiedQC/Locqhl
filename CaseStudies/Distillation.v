@@ -1409,3 +1409,54 @@ Proof.
   { unfold kmid3, kempty; eauto with locc. }
   apply rule_comm_done. cbn. split; reflexivity.
 Qed.
+
+(** ** The local row of a round ****************************************
+
+    Backward through [accept ; CNOT ; Meas] on each side.  The assertion is
+    no longer [distill_post] at the intermediate points — the measurement
+    rule appends [ma = ya] and [mb = yb] — so the guard argument has to be
+    stated for any assertion that pins the latch rather than for
+    [distill_post] alone. *)
+
+Definition ya : var := 10%nat.
+Definition yb : var := 11%nat.
+
+Lemma guard_a_contra : forall n (Q R : assertion (4 * S n)),
+    (forall s, formula_holds (Sig n) s (classical_part Q) = true ->
+               (s da = 1)%nat) ->
+    and_guard Q guard_a true ⊨[Sig n] R.
+Proof.
+  intros n Q R HQ.
+  assert (Hf : forall s, formula_holds (Sig n) s
+                 (classical_part (and_guard Q guard_a true)) = false).
+  { intro s. cbn [and_guard classical_part].
+    destruct (formula_holds (Sig n) s (classical_part Q)) eqn:E.
+    - pose proof (HQ s E) as Hlatch.
+      cbn [and_guard classical_part formula_holds]. rewrite E. cbn [andb].
+      cbn. destruct (s da) as [| [| d]]; cbn in Hlatch |- *; try lia;
+        rewrite ?andb_false_r; reflexivity.
+    - cbn [and_guard classical_part formula_holds]. rewrite E. reflexivity. }
+  split; [| split];
+    [ intros s Hs | intros s Hs | intros s M N Hs ];
+    rewrite Hf in Hs; discriminate.
+Qed.
+
+Lemma guard_b_contra : forall n (Q R : assertion (4 * S n)),
+    (forall s, formula_holds (Sig n) s (classical_part Q) = true ->
+               (s db = 1)%nat) ->
+    and_guard Q guard_b true ⊨[Sig n] R.
+Proof.
+  intros n Q R HQ.
+  assert (Hf : forall s, formula_holds (Sig n) s
+                 (classical_part (and_guard Q guard_b true)) = false).
+  { intro s. cbn [and_guard classical_part].
+    destruct (formula_holds (Sig n) s (classical_part Q)) eqn:E.
+    - pose proof (HQ s E) as Hlatch.
+      cbn [and_guard classical_part formula_holds]. rewrite E. cbn [andb].
+      cbn. destruct (s db) as [| [| d]]; cbn in Hlatch |- *; try lia;
+        rewrite ?andb_false_r; reflexivity.
+    - cbn [and_guard classical_part formula_holds]. rewrite E. reflexivity. }
+  split; [| split];
+    [ intros s Hs | intros s Hs | intros s M N Hs ];
+    rewrite Hf in Hs; discriminate.
+Qed.
