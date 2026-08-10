@@ -21,7 +21,8 @@ BASELINE_FILE="scripts/admit-baseline.txt"
 ALLOWED_OPEN="Core/Soundness.v
 Core/SoundnessFacts.v
 CaseStudies/Teleportation.v
-CaseStudies/Distillation.v"
+CaseStudies/Distillation.v
+CaseStudies/DistillationComplete.v"
 
 baseline=$(tr -d '[:space:]' < "$BASELINE_FILE")
 
