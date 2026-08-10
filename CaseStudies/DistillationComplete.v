@@ -77,16 +77,319 @@ Definition post_q (k n : nat) : Square (2 ^ (4 * S n)) :=
 Definition inv_q (j k n : nat) : Square (2 ^ (4 * S n)) :=
   kron_n j NeqSub ⊗ kron_n (k - j) Rej ⊗ Pass ⊗ kron_n (n - k) (I 16).
 
-(** ** The lifting — OPEN ********************************************
+(** ** Splitting a 16-dimensional operator by its leading qubit *********
 
-    Round [j] occupies qubits [4j .. 4j+3] of a [4(n+1)]-qubit register.
-    Its gates and measurements reach those qubits through [pad_ctrl] and
-    [pad_u] at the SYMBOLIC offset [4j], and that is the whole difficulty:
-    the block algebra underneath is [Pi_pair_sum] / [Pi_pair_eq] /
-    [Pi_pair_neq] above, all three of them two lines.
+    Every product below lives in 16 dimensions, and [lma'] cannot evaluate
+    a 16-dimensional product — its cost is driven by the number of NESTED
+    [Mmult]s (each one costs roughly a factor of five), so anything with
+    more than two of them is out of reach at any dimension.
 
-    These three are the matrix content of the case study, the counterpart
-    of [NonlocalCNOTComplete.rcnot_completeness].  None is proved. *)
+    [s2] is the way round: it splits an operator by the value of its
+    leading qubit, and turns ONE product of size 2m into TWO of size m.
+    Two applications take a round's operators from 16 down to 4, where the
+    remaining products can be pushed onto the two qubits separately by
+    [kron_mixed_product] and finished entrywise. *)
+
+Definition s2 {m : nat} (A B : Square m) : Square (2 * m) :=
+  Pi 0 ⊗ A .+ Pi 1 ⊗ B.
+
+Lemma WF_Pi : forall v, WF_Matrix (Pi v).
+Proof. intro v; unfold Pi; destruct (Nat.eqb v 0%nat); auto with wf_db. Qed.
+#[local] Hint Resolve WF_Pi : wf_db.
+
+Lemma Pi_herm : forall v, (Pi v) † = Pi v.
+Proof. intro v; unfold Pi; destruct (Nat.eqb v 0%nat); lma'. Qed.
+Lemma Pi_00 : Pi 0 × Pi 0 = Pi 0.  Proof. unfold Pi; cbn; lma'. Qed.
+Lemma Pi_11 : Pi 1 × Pi 1 = Pi 1.  Proof. unfold Pi; cbn; lma'. Qed.
+Lemma Pi_01 : Pi 0 × Pi 1 = Zero.  Proof. unfold Pi; cbn; lma'. Qed.
+Lemma Pi_10 : Pi 1 × Pi 0 = Zero.  Proof. unfold Pi; cbn; lma'. Qed.
+
+Lemma s2_mult : forall m (A B C D : Square m),
+    @s2 m A B × @s2 m C D = @s2 m (A × C) (B × D).
+Proof.
+  intros m A B C D. unfold s2.
+  rewrite Mmult_plus_distr_l, !Mmult_plus_distr_r, !kron_mixed_product.
+  rewrite Pi_00, Pi_11, Pi_01, Pi_10, !kron_0_l, Mplus_0_r, Mplus_0_l.
+  reflexivity.
+Qed.
+
+Lemma s2_adj : forall m (A B : Square m), (@s2 m A B) † = @s2 m (A †) (B †).
+Proof.
+  intros m A B. unfold s2.
+  rewrite Mplus_adjoint, !kron_adjoint, !Pi_herm. reflexivity.
+Qed.
+
+Lemma s2_plus : forall m (A B C D : Square m),
+    @s2 m A B .+ @s2 m C D = @s2 m (A .+ C) (B .+ D).
+Proof. intros m A B C D. unfold s2. lma. Qed.
+
+Lemma s2_I : forall m, @s2 m (I m) (I m) = I (2 * m).
+Proof.
+  intro m. unfold s2. rewrite <- kron_plus_distr_r, Pi_sum, id_kron. reflexivity.
+Qed.
+
+Lemma s2_diag : forall m (A : Square m), @s2 m A A = I 2 ⊗ A.
+Proof.
+  intros m A. unfold s2. rewrite <- kron_plus_distr_r, Pi_sum. reflexivity.
+Qed.
+
+Lemma s2_inj : forall m (A B C D : Square m),
+    A = C -> B = D -> @s2 m A B = @s2 m C D.
+Proof. intros; subst; reflexivity. Qed.
+
+Lemma I4_s2 : forall m (A : Square m), WF_Matrix A ->
+    I 4 ⊗ A = @s2 (2 * m) (@s2 m A A) (@s2 m A A).
+Proof.
+  intros m A HA. rewrite !s2_diag, <- kron_assoc by auto with wf_db.
+  rewrite id_kron. reflexivity.
+Qed.
+
+(** ** One round's four qubits: Ak, Bk, At, Bt *************************
+
+    Everything below is stated at dimension 16 — the round's own block —
+    and lifted to the [4(n+1)]-qubit register afterwards. *)
+
+Lemma WF_Ev : WF_Matrix Ev. Proof. unfold Ev; auto with wf_db. Qed.
+Lemma WF_Od : WF_Matrix Od. Proof. unfold Od; auto with wf_db. Qed.
+#[local] Hint Resolve WF_Ev WF_Od : wf_db.
+
+Definition CA4 : Square 16 := pad_ctrl 4 0 2 σx.
+Definition CB4 : Square 16 := pad_ctrl 4 1 3 σx.
+Definition MA4 (v : nat) : Square 16 := pad_u 4 2 (Pi v).
+Definition MB4 (v : nat) : Square 16 := pad_u 4 3 (Pi v).
+
+Ltac padcbn := cbn [Nat.ltb Nat.leb Nat.sub Nat.add Nat.pow];
+  rewrite ?Nat.mul_1_r, ?Nat.mul_1_l.
+
+Lemma CA4_s2 : CA4 = @s2 8 (@s2 4 (I 4) (I 4)) (@s2 4 (σx ⊗ I 2) (σx ⊗ I 2)).
+Proof.
+  unfold CA4, pad_ctrl, pad; padcbn.
+  rewrite kron_1_l by auto with wf_db.
+  rewrite kron_plus_distr_r, !kron_assoc by auto with wf_db.
+  rewrite !id_kron, s2_I, s2_diag. unfold s2.
+  apply Mplus_comm.
+Qed.
+
+Lemma CB4_s2 : CB4 = @s2 8 (@s2 4 (I 4) (I 2 ⊗ σx)) (@s2 4 (I 4) (I 2 ⊗ σx)).
+Proof.
+  unfold CB4, pad_ctrl, pad; padcbn.
+  rewrite kron_1_r by auto with wf_db.
+  rewrite s2_diag. f_equal.
+  rewrite !kron_assoc by auto with wf_db.
+  rewrite !id_kron. unfold s2. apply Mplus_comm.
+Qed.
+
+Lemma pad_u_2 : forall (u : Square 2), WF_Matrix u -> pad_u 4 2 u = I 4 ⊗ (u ⊗ I 2).
+Proof.
+  intros u Hu. rewrite <- kron_assoc by auto with wf_db.
+  unfold pad_u, pad; padcbn. reflexivity.
+Qed.
+
+Lemma pad_u_3 : forall (u : Square 2), WF_Matrix u -> pad_u 4 3 u = I 4 ⊗ (I 2 ⊗ u).
+Proof.
+  intros u Hu. rewrite <- kron_assoc by auto with wf_db. rewrite id_kron.
+  unfold pad_u, pad; padcbn. rewrite kron_1_r by auto with wf_db. reflexivity.
+Qed.
+
+Lemma MA4_s2 : forall v, MA4 v
+    = @s2 8 (@s2 4 (Pi v ⊗ I 2) (Pi v ⊗ I 2)) (@s2 4 (Pi v ⊗ I 2) (Pi v ⊗ I 2)).
+Proof.
+  intro v. unfold MA4. rewrite pad_u_2 by auto with wf_db.
+  rewrite I4_s2 by auto with wf_db. reflexivity.
+Qed.
+
+Lemma MB4_s2 : forall v, MB4 v
+    = @s2 8 (@s2 4 (I 2 ⊗ Pi v) (I 2 ⊗ Pi v)) (@s2 4 (I 2 ⊗ Pi v) (I 2 ⊗ Pi v)).
+Proof.
+  intro v. unfold MB4. rewrite pad_u_3 by auto with wf_db.
+  rewrite I4_s2 by auto with wf_db. reflexivity.
+Qed.
+
+Lemma Ev_kron : forall m (C : Square m), WF_Matrix C ->
+    Ev ⊗ C = @s2 (2 * m) (Pi 0 ⊗ C) (Pi 1 ⊗ C).
+Proof.
+  intros m C HC. unfold Ev, s2.
+  rewrite kron_plus_distr_r, !kron_assoc by auto with wf_db. reflexivity.
+Qed.
+
+Lemma Od_kron : forall m (C : Square m), WF_Matrix C ->
+    Od ⊗ C = @s2 (2 * m) (Pi 1 ⊗ C) (Pi 0 ⊗ C).
+Proof.
+  intros m C HC. unfold Od, s2.
+  rewrite kron_plus_distr_r, !kron_assoc by auto with wf_db. reflexivity.
+Qed.
+
+Lemma Pass_s2 : Pass = @s2 8 (@s2 4 Ev Od) (@s2 4 Od Ev).
+Proof.
+  unfold Pass.
+  rewrite Ev_kron by auto with wf_db. rewrite Od_kron by auto with wf_db.
+  restore_dims. rewrite s2_plus.
+  apply s2_inj; [reflexivity | apply Mplus_comm].
+Qed.
+
+Lemma Rej_s2 : Rej = @s2 8 (@s2 4 Od Ev) (@s2 4 Ev Od).
+Proof.
+  unfold Rej.
+  rewrite Ev_kron by auto with wf_db. rewrite Od_kron by auto with wf_db.
+  restore_dims. rewrite s2_plus.
+  apply s2_inj; [reflexivity | apply Mplus_comm].
+Qed.
+
+Lemma EqSub_s2 : EqSub = @s2 8 (@s2 4 Ev Ev) (@s2 4 Ev Ev).
+Proof. unfold EqSub. rewrite I4_s2 by auto with wf_db. reflexivity. Qed.
+
+Lemma NeqSub_s2 : NeqSub = @s2 8 (@s2 4 Od Od) (@s2 4 Od Od).
+Proof. unfold NeqSub. rewrite I4_s2 by auto with wf_db. reflexivity. Qed.
+
+(** ** The block-level transformers and the four core identities ******* *)
+
+Definition wpA4 (v : nat) (X : Square 16) : Square 16 :=
+  CA4 † × ((MA4 v) † × X × MA4 v) × CA4.
+Definition wpB4 (v : nat) (X : Square 16) : Square 16 :=
+  CB4 † × ((MB4 v) † × X × MB4 v) × CB4.
+Definition r4 (va vb : nat) (X : Square 16) : Square 16 := wpA4 va (wpB4 vb X).
+
+Ltac s2_step :=
+  restore_dims; rewrite ?s2_adj;
+  restore_dims; rewrite ?s2_mult;
+  restore_dims; rewrite ?s2_plus.
+
+Ltac leafcycle :=
+  restore_dims; rewrite ?Mmult_plus_distr_l, ?Mmult_plus_distr_r;
+  restore_dims; rewrite ?kron_mixed_product; Msimpl.
+
+Ltac leaf :=
+  restore_dims; rewrite ?kron_adjoint; Msimpl;
+  unfold Ev, Od, Pi; cbn [Nat.eqb];
+  leafcycle; leafcycle; leafcycle; leafcycle;
+  lma'; auto 20 with wf_db.
+
+Ltac to_s2 :=
+  unfold r4, wpA4, wpB4;
+  rewrite ?CA4_s2, ?CB4_s2, ?MA4_s2, ?MB4_s2,
+          ?EqSub_s2, ?NeqSub_s2, ?Pass_s2, ?Rej_s2.
+
+Ltac core := to_s2; s2_step; apply s2_inj; s2_step; apply s2_inj; leaf.
+
+(** The accepting round: only the two AGREEING outcome pairs survive, and
+    the bilateral CNOT pulls [EqSub] back to [Pass]. *)
+Lemma core_accept : r4 0 0 EqSub .+ r4 1 1 EqSub = Pass.
+Proof. core. Qed.
+
+(** A rejecting round: only the two DISAGREEING pairs survive, and the
+    bilateral CNOT pulls [NeqSub] back to [Rej]. *)
+Lemma core_reject : r4 0 1 NeqSub .+ r4 1 0 NeqSub = Rej.
+Proof. core. Qed.
+
+(** An idle round, one party at a time: the two outcomes sum to the
+    identity on that party's test qubit, and its CNOT then cancels. *)
+Lemma core_idleA : wpA4 0 (I 16) .+ wpA4 1 (I 16) = I 16.
+Proof.
+  unfold wpA4. rewrite ?CA4_s2, ?MA4_s2.
+  replace (I 16) with (@s2 8 (@s2 4 (I 4) (I 4)) (@s2 4 (I 4) (I 4)))
+    by (rewrite !s2_I; reflexivity).
+  s2_step. apply s2_inj; s2_step; apply s2_inj; leaf.
+Qed.
+
+Lemma core_idleB : wpB4 0 (I 16) .+ wpB4 1 (I 16) = I 16.
+Proof.
+  unfold wpB4. rewrite ?CB4_s2, ?MB4_s2.
+  replace (I 16) with (@s2 8 (@s2 4 (I 4) (I 4)) (@s2 4 (I 4) (I 4)))
+    by (rewrite !s2_I; reflexivity).
+  s2_step. apply s2_inj; s2_step; apply s2_inj; leaf.
+Qed.
+Lemma pow16 : forall j, (16 ^ j)%nat = (2 ^ (4 * j))%nat.
+Proof. intro j. rewrite Nat.pow_mul_r. reflexivity. Qed.
+
+(** The one lemma the whole matrix side stands on: an operator padded at a
+    SYMBOLIC offset [4j] touches only block [j].  The right-hand side is
+    written out rather than as [pad w s 4 A], so that the middle factor's
+    kron index is the natural [2^s * 2^w * 2^(4-s-w)] and not the ascribed
+    [16] — for symbolic [s] and [w] the two are equal but NOT convertible,
+    and [kron_assoc] would not unify. *)
+Lemma pad_block : forall n j s w (A : Square (2 ^ w)),
+    WF_Matrix A -> (j <= n)%nat -> (s + w <= 4)%nat ->
+    @pad w (4 * j + s) (4 * S n) A
+    = I (16 ^ j) ⊗ (I (2 ^ s) ⊗ A ⊗ I (2 ^ (4 - (s + w)))) ⊗ I (16 ^ (n - j)).
+Proof.
+  intros n j s w A HA Hj Hsw. unfold pad.
+  bdestruct (4 * j + s + w <=? 4 * S n); [| exfalso; lia].
+  rewrite !pow16.
+  replace (2 ^ (4 * j + s))%nat with (2 ^ (4 * j) * 2 ^ s)%nat
+    by (rewrite <- Nat.pow_add_r; reflexivity).
+  replace (2 ^ (4 * S n - (4 * j + s + w)))%nat
+     with (2 ^ (4 - (s + w)) * 2 ^ (4 * (n - j)))%nat
+    by (rewrite <- Nat.pow_add_r; f_equal; lia).
+  rewrite <- !id_kron.
+  rewrite <- !kron_assoc by auto with wf_db.
+  reflexivity.
+Qed.
+
+Lemma pad_block0 : forall n j w (A : Square (2 ^ w)),
+    WF_Matrix A -> (j <= n)%nat -> (w <= 4)%nat ->
+    @pad w (4 * j) (4 * S n) A
+    = I (16 ^ j) ⊗ (A ⊗ I (2 ^ (4 - w))) ⊗ I (16 ^ (n - j)).
+Proof.
+  intros n j w A HA Hj Hw.
+  replace (4 * j)%nat with (4 * j + 0)%nat by lia.
+  rewrite (pad_block n j 0 w A HA Hj ltac:(lia)).
+  cbn [Nat.pow]. rewrite kron_1_l by assumption. rewrite ?Nat.mul_1_l.
+  replace (4 - (0 + w))%nat with (4 - w)%nat by lia.
+  reflexivity.
+Qed.
+
+Lemma pad_ctrl_blockA : forall n j (u : Square 2), WF_Matrix u -> (j <= n)%nat ->
+    pad_ctrl (4 * S n) (4 * j) (4 * j + 2) u
+    = I (16 ^ j) ⊗ pad_ctrl 4 0 2 u ⊗ I (16 ^ (n - j)).
+Proof.
+  intros n j u Hu Hj. unfold pad_ctrl at 1.
+  bdestruct (4 * j <? 4 * j + 2); [| exfalso; lia].
+  replace (4 * j + 2 - 4 * j - 1)%nat with 1%nat by lia.
+  rewrite (pad_block0 n j (1 + 1 + 1)
+             (∣1⟩⟨1∣ ⊗ I (2 ^ 1) ⊗ u .+ ∣0⟩⟨0∣ ⊗ I (2 ^ 1) ⊗ I 2)
+             ltac:(auto with wf_db) Hj ltac:(lia)).
+  unfold pad_ctrl, pad; cbn; Msimpl; reflexivity.
+Qed.
+
+Lemma pad_ctrl_blockB : forall n j (u : Square 2), WF_Matrix u -> (j <= n)%nat ->
+    pad_ctrl (4 * S n) (4 * j + 1) (4 * j + 3) u
+    = I (16 ^ j) ⊗ pad_ctrl 4 1 3 u ⊗ I (16 ^ (n - j)).
+Proof.
+  intros n j u Hu Hj. unfold pad_ctrl at 1.
+  bdestruct (4 * j + 1 <? 4 * j + 3); [| exfalso; lia].
+  replace (4 * j + 3 - (4 * j + 1) - 1)%nat with 1%nat by lia.
+  rewrite (pad_block n j 1 (1 + 1 + 1)
+             (∣1⟩⟨1∣ ⊗ I (2 ^ 1) ⊗ u .+ ∣0⟩⟨0∣ ⊗ I (2 ^ 1) ⊗ I 2)
+             ltac:(auto with wf_db) Hj ltac:(lia)).
+  unfold pad_ctrl, pad; cbn; Msimpl; reflexivity.
+Qed.
+
+Lemma pad_u_blockA : forall n j (u : Square 2), WF_Matrix u -> (j <= n)%nat ->
+    pad_u (4 * S n) (4 * j + 2) u = I (16 ^ j) ⊗ pad_u 4 2 u ⊗ I (16 ^ (n - j)).
+Proof.
+  intros n j u Hu Hj. unfold pad_u at 1.
+  rewrite (pad_block n j 2 1 u Hu Hj) by lia.
+  unfold pad_u, pad; cbn; Msimpl; reflexivity.
+Qed.
+
+Lemma pad_u_blockB : forall n j (u : Square 2), WF_Matrix u -> (j <= n)%nat ->
+    pad_u (4 * S n) (4 * j + 3) u = I (16 ^ j) ⊗ pad_u 4 3 u ⊗ I (16 ^ (n - j)).
+Proof.
+  intros n j u Hu Hj. unfold pad_u at 1.
+  rewrite (pad_block n j 3 1 u Hu Hj) by lia.
+  unfold pad_u, pad; cbn; Msimpl; reflexivity.
+Qed.
+(** ** A round's operators, and their block form *********************** *)
+
+Lemma WF_CA4 : WF_Matrix CA4.
+Proof. unfold CA4. apply (WF_pad_ctrl 4); auto with wf_db. Qed.
+Lemma WF_CB4 : WF_Matrix CB4.
+Proof. unfold CB4. apply (WF_pad_ctrl 4); auto with wf_db. Qed.
+Lemma WF_MA4 : forall v, WF_Matrix (MA4 v).
+Proof. intro v. unfold MA4. apply (WF_pad_u 4); auto with wf_db. Qed.
+Lemma WF_MB4 : forall v, WF_Matrix (MB4 v).
+Proof. intro v. unfold MB4. apply (WF_pad_u 4); auto with wf_db. Qed.
+#[local] Hint Resolve WF_CA4 WF_CB4 WF_MA4 WF_MB4 : wf_db.
 
 Definition cA (n j : nat) : Square (2 ^ (4 * S n)) :=
   pad_ctrl (4 * S n) (Ak j) (At j) σx.
@@ -97,12 +400,35 @@ Definition mA (n j v : nat) : Square (2 ^ (4 * S n)) :=
 Definition mB (n j v : nat) : Square (2 ^ (4 * S n)) :=
   pad_u (4 * S n) (Bt j) (Pi v).
 
-(** ONE PARTY's half of a round, read backwards: the weakest precondition
-    of that party's [CNOT ; Meas] at outcome [v].  The two halves touch
-    disjoint qubits, so a round's transformer is their composition, and —
-    when the two outcomes are not correlated — each may be summed on its
-    own.  That is what an idle round needs, and it is why the derivation
-    can keep [distill_post] as the assertion BETWEEN the two halves. *)
+Lemma cA_block : forall n j, (j <= n)%nat ->
+    cA n j = I (16 ^ j) ⊗ CA4 ⊗ I (16 ^ (n - j)).
+Proof.
+  intros n j Hj. unfold cA, Ak, At, CA4.
+  apply pad_ctrl_blockA; [auto with wf_db | exact Hj].
+Qed.
+
+Lemma cB_block : forall n j, (j <= n)%nat ->
+    cB n j = I (16 ^ j) ⊗ CB4 ⊗ I (16 ^ (n - j)).
+Proof.
+  intros n j Hj. unfold cB, Bk, Bt, CB4.
+  apply pad_ctrl_blockB; [auto with wf_db | exact Hj].
+Qed.
+
+Lemma mA_block : forall n j v, (j <= n)%nat ->
+    mA n j v = I (16 ^ j) ⊗ MA4 v ⊗ I (16 ^ (n - j)).
+Proof.
+  intros n j v Hj. unfold mA, At, MA4.
+  apply pad_u_blockA; [auto with wf_db | exact Hj].
+Qed.
+
+Lemma mB_block : forall n j v, (j <= n)%nat ->
+    mB n j v = I (16 ^ j) ⊗ MB4 v ⊗ I (16 ^ (n - j)).
+Proof.
+  intros n j v Hj. unfold mB, Bt, MB4.
+  apply pad_u_blockB; [auto with wf_db | exact Hj].
+Qed.
+
+(** ONE PARTY's half of a round, read backwards. *)
 Definition wpA (n j v : nat) (X : Square (2 ^ (4 * S n)))
   : Square (2 ^ (4 * S n)) :=
   (cA n j) † × ((mA n j v) † × X × (mA n j v)) × (cA n j).
@@ -111,8 +437,6 @@ Definition wpB (n j v : nat) (X : Square (2 ^ (4 * S n)))
   : Square (2 ^ (4 * S n)) :=
   (cB n j) † × ((mB n j v) † × X × (mB n j v)) × (cB n j).
 
-(** One round's backward transformer at outcome pair (va, vb): the weakest
-    precondition of [CNOT_A ; Meas_A ; CNOT_B ; Meas_B], read outside-in. *)
 Definition round_wp (n j va vb : nat) (X : Square (2 ^ (4 * S n)))
   : Square (2 ^ (4 * S n)) :=
   wpA n j va (wpB n j vb X).
@@ -131,10 +455,130 @@ Proof.
   reflexivity.
 Qed.
 
-(** OPEN 1a/1b — an idle round, [j > k].  The postcondition leaves round
-    [j] free, so on EACH side the two outcome operators sum to the
-    identity on the measured qubit ([Pi_sum]) and the party's CNOT then
-    cancels against the free factor. *)
+(** ** Localisation ***************************************************
+
+    Conjugating a three-factor tensor by an operator supported on the
+    middle factor leaves the outer two alone. *)
+
+Lemma conj_local : forall a b (L : Square a) (R : Square b) (X K : Square 16),
+    WF_Matrix L -> WF_Matrix R -> WF_Matrix X -> WF_Matrix K ->
+    (I a ⊗ K ⊗ I b) † × (L ⊗ X ⊗ R) × (I a ⊗ K ⊗ I b)
+    = L ⊗ (K † × X × K) ⊗ R.
+Proof.
+  intros a b L R X K HL HR HX HK.
+  rewrite !kron_adjoint, !id_adjoint_eq.
+  rewrite !kron_mixed_product. Msimpl. reflexivity.
+Qed.
+
+Lemma dim16 : forall j n, (j <= n)%nat ->
+    (16 ^ j * 16 * 16 ^ (n - j))%nat = (2 ^ (4 * S n))%nat.
+Proof.
+  intros j n H.
+  replace (16 ^ j * 16 * 16 ^ (n - j))%nat with (16 ^ (j + 1 + (n - j)))%nat
+    by (rewrite !Nat.pow_add_r; cbn [Nat.pow]; ring).
+  replace (j + 1 + (n - j))%nat with (S n) by lia.
+  rewrite Nat.pow_mul_r. reflexivity.
+Qed.
+
+Lemma wpA_local : forall n j v (L : Square (16 ^ j)) (R : Square (16 ^ (n - j)))
+                         (X : Square 16),
+    (j <= n)%nat -> WF_Matrix L -> WF_Matrix R -> WF_Matrix X ->
+    wpA n j v (L ⊗ X ⊗ R) = L ⊗ wpA4 v X ⊗ R.
+Proof.
+  intros n j v L R X Hj HL HR HX.
+  unfold wpA, wpA4.
+  rewrite (cA_block n j Hj), (mA_block n j v Hj).
+  rewrite <- (dim16 j n Hj).
+  rewrite !conj_local by auto with wf_db.
+  reflexivity.
+Qed.
+
+Lemma wpB_local : forall n j v (L : Square (16 ^ j)) (R : Square (16 ^ (n - j)))
+                         (X : Square 16),
+    (j <= n)%nat -> WF_Matrix L -> WF_Matrix R -> WF_Matrix X ->
+    wpB n j v (L ⊗ X ⊗ R) = L ⊗ wpB4 v X ⊗ R.
+Proof.
+  intros n j v L R X Hj HL HR HX.
+  unfold wpB, wpB4.
+  rewrite (cB_block n j Hj), (mB_block n j v Hj).
+  rewrite <- (dim16 j n Hj).
+  rewrite !conj_local by auto with wf_db.
+  reflexivity.
+Qed.
+
+(** ** Splitting a predicate at one block ****************************** *)
+
+Lemma WF_Pass : WF_Matrix Pass.     Proof. unfold Pass; auto with wf_db. Qed.
+Lemma WF_Rej : WF_Matrix Rej.       Proof. unfold Rej; auto with wf_db. Qed.
+Lemma WF_EqSub : WF_Matrix EqSub.   Proof. unfold EqSub; auto with wf_db. Qed.
+Lemma WF_NeqSub : WF_Matrix NeqSub. Proof. unfold NeqSub; auto with wf_db. Qed.
+#[local] Hint Resolve WF_Pass WF_Rej WF_EqSub WF_NeqSub : wf_db.
+Lemma WF_kn_NeqSub : forall j, WF_Matrix (kron_n j NeqSub).
+Proof. intro j. apply WF_kron_n; auto with wf_db. Qed.
+Lemma WF_kn_Rej : forall j, WF_Matrix (kron_n j Rej).
+Proof. intro j. apply WF_kron_n; auto with wf_db. Qed.
+#[local] Hint Resolve WF_kron_n WF_kn_NeqSub WF_kn_Rej : wf_db.
+
+Lemma pow16_split : forall a b, (16 ^ a * 16 * 16 ^ b)%nat = (16 ^ (a + 1 + b))%nat.
+Proof. intros a b. rewrite !Nat.pow_add_r; cbn [Nat.pow]; ring. Qed.
+
+(** An idle round [j > k]: the postcondition leaves block [j] free. *)
+Lemma post_q_idle : forall k n j, (k < j)%nat -> (j <= n)%nat ->
+    exists L : Square (16 ^ j),
+      WF_Matrix L /\ post_q k n = L ⊗ I 16 ⊗ I (16 ^ (n - j)).
+Proof.
+  intros k n j Hkj Hjn.
+  exists (kron_n k NeqSub ⊗ EqSub ⊗ I (16 ^ (j - k - 1))).
+  replace (16 ^ j)%nat with (16 ^ k * 16 * 16 ^ (j - k - 1))%nat
+    by (rewrite pow16_split; f_equal; lia).
+  split; [solve [auto 30 with wf_db] |].
+  unfold post_q. rewrite kron_n_I_gen.
+  replace (16 ^ (n - k))%nat with (16 ^ (j - k - 1) * 16 * 16 ^ (n - j))%nat
+    by (rewrite pow16_split; f_equal; lia).
+  rewrite <- !id_kron.
+  rewrite <- !kron_assoc by auto with wf_db.
+  reflexivity.
+Qed.
+
+(** The accepting round [j = k]: block [k] carries [EqSub] afterwards and
+    [Pass] before. *)
+Lemma acc_split : forall k n, (k <= n)%nat ->
+    post_q k n = kron_n k NeqSub ⊗ EqSub ⊗ I (16 ^ (n - k))
+    /\ inv_q k k n = kron_n k NeqSub ⊗ Pass ⊗ I (16 ^ (n - k)).
+Proof.
+  intros k n Hk. split.
+  - unfold post_q. rewrite kron_n_I_gen. reflexivity.
+  - unfold inv_q. rewrite kron_n_I_gen.
+    replace (k - k)%nat with 0%nat by lia. cbn [kron_n].
+    rewrite kron_1_r by auto with wf_db. reflexivity.
+Qed.
+
+(** A rejecting round [j < k]: block [j] carries [NeqSub] afterwards and
+    [Rej] before, with everything to its right unchanged. *)
+(** The rejecting round's split — [inv_q (S j) k n = L ⊗ NeqSub ⊗ R] and
+    [inv_q j k n = L ⊗ Rej ⊗ R] with a common [L] and [R] — is the one
+    piece still missing, and with it the four obligations below.  It is
+    not a mathematical gap: the two equations hold by [kron_assoc] alone.
+    What is unfinished is the index bookkeeping, [16 ^ (S j)] against
+    [16 ^ j * 16] against [16 * 16 ^ j], and the matching associativity of
+    the nat products a kron records. *)
+
+(** ** The four obligations *******************************************
+
+    Each is now one localisation step away: [post_q_idle] / [acc_split] /
+    [rej_split] put the predicate in the [L ⊗ X ⊗ R] form, [wpA_local] /
+    [wpB_local] push the round's operators onto the middle factor, and the
+    four [core_*] identities above do the rest.  What is still open is the
+    index bookkeeping of that last step — QuantumLib records a kron's
+    dimension arguments syntactically, and [16 ^ (S j)], [16 ^ j * 16] and
+    [16 * 16 ^ j] are three different terms for one number. *)
+
+Lemma core_accept' : wpA4 0 (wpB4 0 EqSub) .+ wpA4 1 (wpB4 1 EqSub) = Pass.
+Proof. exact core_accept. Qed.
+
+Lemma core_reject' : wpA4 0 (wpB4 1 NeqSub) .+ wpA4 1 (wpB4 0 NeqSub) = Rej.
+Proof. exact core_reject. Qed.
+
 Lemma wpA_sum_idle : forall n k j,
     (k < j)%nat -> (j <= n)%nat ->
     wpA n j 0 (post_q k n) .+ wpA n j 1 (post_q k n) = post_q k n.
@@ -145,10 +589,19 @@ Lemma wpB_sum_idle : forall n k j,
     wpB n j 0 (post_q k n) .+ wpB n j 1 (post_q k n) = post_q k n.
 Admitted.
 
-(** The coupled statement, for reference: an idle round as a whole is the
-    identity.  It is not what the derivation uses — the two halves are —
-    but it is the counterpart of OPEN 2 and OPEN 3 below, which cannot be
-    split because there the two outcomes ARE correlated. *)
+Lemma round_sum_accept : forall n k,
+    (k <= n)%nat ->
+    (round_wp n k 0 0 (post_q k n) .+ round_wp n k 1 1 (post_q k n))
+    = inv_q k k n.
+Admitted.
+
+Lemma round_sum_reject : forall n k j,
+    (j < k)%nat -> (k <= n)%nat ->
+    (round_wp n j 0 1 (inv_q (S j) k n) .+ round_wp n j 1 0 (inv_q (S j) k n))
+    = inv_q j k n.
+Admitted.
+
+(** An idle round as a whole, from the two halves. *)
 Lemma round_sum_idle : forall n k j,
     (k < j)%nat -> (j <= n)%nat ->
     round_sum n j (post_q k n) = post_q k n.
@@ -158,32 +611,6 @@ Proof.
   rewrite (wpB_sum_idle n k j H1 H2).
   apply (wpA_sum_idle n k j H1 H2).
 Qed.
-
-(** OPEN 2 — the accepting round, [j = k].  Only the two agreeing outcomes
-    survive ([Pi_pair_eq] gives [Ev] on the target pair), and pulling
-    [EqSub] back through the bilateral CNOTs gives [Pass].  The rounds
-    before [k] have already been measured, so the left factor is [NeqSub]
-    and the target is [inv_q k k n], not [pre_q k n]. *)
-Lemma round_sum_accept : forall n k,
-    (k <= n)%nat ->
-    (round_wp n k 0 0 (post_q k n) .+ round_wp n k 1 1 (post_q k n))
-    = inv_q k k n.
-Admitted.
-
-(** OPEN 3 — a rejecting round, [j < k].  The two disagreeing outcomes
-    survive ([Pi_pair_neq] gives [Od]), and pulling [NeqSub] back through
-    the bilateral CNOTs gives [Rej] — Distillation.md's
-
-        A(1,0) + A(0,1) = CNOT_A* CNOT_B* NeqSub_j CNOT_B CNOT_A = Rej_j.
-
-    Round [j] carries [NeqSub] in [inv_q (S j) k n] and [Rej] in
-    [inv_q j k n]; the two agreeing outcomes contribute Zero, which is why
-    only two summands appear. *)
-Lemma round_sum_reject : forall n k j,
-    (j < k)%nat -> (k <= n)%nat ->
-    (round_wp n j 0 1 (inv_q (S j) k n) .+ round_wp n j 1 0 (inv_q (S j) k n))
-    = inv_q j k n.
-Admitted.
 
 (** And [inv_q 0 k n] is the specification's precondition, up to the unit
     factor [kron_n 0 _ = I 1]. *)
