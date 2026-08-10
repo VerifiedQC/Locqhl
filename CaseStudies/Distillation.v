@@ -1108,3 +1108,93 @@ Proof.
     [ intros s Hs | intros s Hs | intros s M N Hs ];
     rewrite Hf in Hs; discriminate.
 Qed.
+
+(** ** Effects *********************************************************
+
+    [is_effect M] is 0 ⊑ M ⊑ I, the assertion-formation check that Conseq
+    and Par-Comp-MP both carry.  Every assertion of this case study is a
+    tensor of projectors, so one generic argument covers all of them. *)
+
+Lemma lowner_refl : forall m (M : Square m), M ⊑ M.
+Proof.
+  intros m M. unfold lowner, positive_semidefinite. intros z Hz.
+  replace (M .+ (- C1) .* M) with (@Zero m m) by lma.
+  rewrite Mmult_0_r, Mmult_0_l. cbn. lra.
+Qed.
+
+Lemma entails_refl : forall d (S0 : interp d) (Q : assertion d), Q ⊨[S0] Q.
+Proof.
+  intros d S0 Q. repeat split; auto.
+  intros s M N _ H1 H2. rewrite H1 in H2. inversion H2. apply lowner_refl.
+Qed.
+
+Lemma herm_idem_psd : forall m (M : Square m),
+    M † = M -> M × M = M -> positive_semidefinite M.
+Proof.
+  intros m M Hh Hi.
+  assert (E : M = M × M †) by (rewrite Hh, Hi; reflexivity).
+  rewrite E at 1. apply positive_semidefinite_AAadjoint.
+Qed.
+
+Lemma herm_idem_effect : forall d (M : Square (2 ^ d)),
+    WF_Matrix M -> M † = M -> M × M = M -> is_effect (dim := d) M.
+Proof.
+  intros d M HW Hh Hi. split; [apply herm_idem_psd; assumption |].
+  unfold lowner. apply herm_idem_psd.
+  - rewrite Mplus_adjoint, Mscale_adj, id_adjoint_eq, Hh.
+    replace ((- C1) ^* )%C with (- C1)%C by lca. reflexivity.
+  - rewrite Mmult_plus_distr_l, !Mmult_plus_distr_r. Msimpl.
+    rewrite Mscale_mult_dist_l, Mscale_mult_dist_r, Mscale_assoc, Hi.
+    lma.
+Qed.
+
+(** A projector, packaged so the three closure properties can be chained. *)
+Definition projlike {m} (P : Square m) : Prop :=
+  WF_Matrix P /\ P † = P /\ P × P = P.
+
+Lemma projlike_I : forall m, projlike (I m).
+Proof.
+  intro m; repeat split; [ auto with wf_db | apply id_adjoint_eq
+                         | apply Mmult_1_l; auto with wf_db ].
+Qed.
+
+Lemma projlike_kron : forall m m' (P : Square m) (Q : Square m'),
+    projlike P -> projlike Q -> projlike (P ⊗ Q).
+Proof.
+  intros m m' P Q [WP [HP IP]] [WQ [HQ IQ]]; repeat split.
+  - auto with wf_db.
+  - rewrite kron_adjoint, HP, HQ; reflexivity.
+  - rewrite kron_mixed_product, IP, IQ; reflexivity.
+Qed.
+
+Lemma projlike_kron_n : forall m (P : Square m) j,
+    projlike P -> projlike (kron_n j P).
+Proof.
+  intros m P j HP; induction j as [| j' IH]; cbn [kron_n].
+  - apply projlike_I.
+  - assert (E : (m ^ S j')%nat = (m ^ j' * m)%nat)
+      by (cbn [Nat.pow]; apply Nat.mul_comm).
+    rewrite E. apply projlike_kron; assumption.
+Qed.
+
+Lemma projlike_Ev : projlike Ev.
+Proof.
+  unfold Ev; repeat split; [ auto with wf_db | lma' | lma' ].
+Qed.
+
+Lemma projlike_Od : projlike Od.
+Proof.
+  unfold Od; repeat split; [ auto with wf_db | lma' | lma' ].
+Qed.
+
+Lemma projlike_EqSub : projlike EqSub.
+Proof.
+  unfold EqSub. change (@projlike (4 * 4) (I 4 ⊗ Ev)).
+  apply projlike_kron; [apply projlike_I | apply projlike_Ev].
+Qed.
+
+Lemma projlike_NeqSub : projlike NeqSub.
+Proof.
+  unfold NeqSub. change (@projlike (4 * 4) (I 4 ⊗ Od)).
+  apply projlike_kron; [apply projlike_I | apply projlike_Od].
+Qed.
