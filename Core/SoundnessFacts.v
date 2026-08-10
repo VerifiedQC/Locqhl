@@ -922,68 +922,6 @@ Section SoundnessFacts.
   Qed.
 
   (** The Hoare half of [local_sound], at the ensemble level. *)
-  Lemma denote_sound :
-    wf_interp ->
-    forall (Q R : assertion dim) (L : lblock),
-      Σ ⊢ₗ {{ Q }} L {{ R }} ->
-      forall E, ensemble_ok E ->
-        total_degree Σ Q E <= total_degree Σ R (denote L E).
-  Proof.
-    intros interp_ok Q R L Hd.
-    induction Hd as
-      [ Q0
-      | Q0 x e
-      | Q0 U qs
-      | Q0 x M qs y Hyx Hyfree
-      | Q1 Q2 Q3 L1 L2 D1 IH1 D2 IH2
-      | Q0 R0 b L1 L0 D1 IH1 D0 IH0
-      | Q0 Q' R0 R' L0 Hent1 D IH Hent2 Hwf
-      ]; intros E HokE; simpl.
-    - (* skip *) apply Rle_refl.
-    - (* assign *) rewrite total_degree_subst_map. apply Rle_refl.
-    - (* unitary *) rewrite total_degree_wp_unitary_map. apply Rle_refl.
-    - (* meas *)
-      rewrite (total_degree_meas_flat interp_ok Q0 x y M qs E Hyx).
-      apply Rle_refl.
-    - (* seq *)
-      eapply Rle_trans; [apply IH1; exact HokE |].
-      apply IH2, denote_ok; auto.
-    - (* if *)
-      rewrite (total_degree_guard_split Q0 b E), total_degree_app.
-      apply Rplus_le_compat.
-      + apply IH1. unfold ensemble_ok, ensemble_filter.
-        apply Forall_filter_keep. exact HokE.
-      + apply IH0. unfold ensemble_ok, ensemble_filter.
-        apply Forall_filter_keep. exact HokE.
-    - (* conseq — split E on Q''s guards; the guard-failing part costs
-         nothing on the left and is ≥ 0 on the right by wf_assertion R' *)
-      pose proof (filter_split_perm _ (guards_pass Q') E) as Hsplit.
-      set (Epass := filter (guards_pass Q') E) in *.
-      set (Efail := filter (fun st => negb (guards_pass Q' st)) E) in *.
-      assert (HokEpass : ensemble_ok Epass)
-        by (unfold Epass, ensemble_ok; apply Forall_filter_keep; exact HokE).
-      assert (HokEfail : ensemble_ok Efail)
-        by (unfold Efail, ensemble_ok; apply Forall_filter_keep; exact HokE).
-      assert (Hd0 : total_degree Σ Q' Efail = 0%R)
-        by (unfold Efail; apply total_degree_guards_fail).
-      assert (Hpre : (total_degree Σ Q' Epass <= total_degree Σ Q0 Epass)%R)
-        by (unfold Epass; apply total_degree_entails_pass; assumption).
-      pose proof (IH Epass HokEpass) as Hmid.
-      pose proof (total_degree_entails Σ R0 R' (denote L0 Epass) Hent2 Hwf
-                    (denote_ok interp_ok L0 Epass HokEpass)) as Hpost.
-      pose proof (total_degree_nonneg R' (denote L0 Efail) Hwf
-                    (denote_ok interp_ok L0 Efail HokEfail)) as Hdead.
-      rewrite (total_degree_perm Q' _ _ Hsplit), total_degree_app, Hd0.
-      rewrite (total_degree_perm R' _ _ (denote_perm L0 _ _ Hsplit)).
-      rewrite (total_degree_perm R' _ _ (denote_app L0 Epass Efail)).
-      rewrite total_degree_app.
-      rewrite Rplus_0_r.
-      eapply Rle_trans; [exact Hpre |].
-      eapply Rle_trans; [exact Hmid |].
-      eapply Rle_trans; [exact Hpost |].
-      rewrite <- (Rplus_0_r (total_degree Σ R' (denote L0 Epass))) at 1.
-      apply Rplus_le_compat_l. exact Hdead.
-  Qed.
 
 (** ** Branch-Accum: finite additivity of the degree.
          A sum of pre-effects splits the input degree; mutually exclusive
@@ -1133,6 +1071,111 @@ Section SoundnessFacts.
   Proof.
     intros l1 l2 b1 b2 Hb H; induction H; cbn [fold_right]; [exact Hb | lra].
   Qed.
+
+  Lemma fold_right_Rplus_add : forall {A} (f g : A -> R) (l : list A),
+      (fold_right Rplus 0%R (map f l) + fold_right Rplus 0%R (map g l))%R
+      = fold_right Rplus 0%R (map (fun a => (f a + g a)%R) l).
+  Proof. intros A f g l; induction l; cbn [map fold_right]; lra. Qed.
+
+  Lemma fold_right_Rplus_zeros : forall {A} (l : list A),
+      fold_right Rplus 0%R (map (fun _ : A => 0%R) l) = 0%R.
+  Proof. intros A l; induction l; cbn [map fold_right]; lra. Qed.
+
+  (** The ensemble form of [degree_qsum].  Unlike the distributed judgment,
+      [denote_sound] carries no definedness assumption, so the local
+      Branch-Accum rule has to state one — [q_add] is undefined as soon as
+      one summand is, and then the two sides part company. *)
+  Lemma total_degree_qsum : forall phi As E,
+      (forall s, exists M, qpred_denote Σ s (qsum As) = Some M) ->
+      total_degree Σ (mk_assertion phi (qsum As)) E
+      = fold_right Rplus 0%R
+          (map (fun A => total_degree Σ (mk_assertion phi A) E) As).
+  Proof.
+    intros phi As E Hdef. unfold total_degree.
+    induction E as [| [s r] E' IH]; cbn [map fold_right].
+    - symmetry. apply fold_right_Rplus_zeros.
+    - destruct (Hdef s) as [M HM].
+      rewrite (degree_qsum phi As s r M HM), IH.
+      rewrite fold_right_Rplus_add. reflexivity.
+  Qed.
+
+  (** [Forall] premises get no induction hypothesis from the default
+      scheme, so the local judgment needs the same hand-written principle
+      the distributed one has ([Soundness.derivable_ind']). *)
+  Fixpoint local_derivable_ind'
+      (Pr : assertion dim -> lblock -> assertion dim -> Prop)
+      (Hsk : forall Q, Pr Q <{ skip }> Q)
+      (Has : forall Q x e,
+          Pr (assertion_subst Q x e) <{ x := e }> Q)
+      (Hun : forall Q U qs,
+          Pr (wp_unitary (i_uu Σ U qs) Q) <{ U @ qs }> Q)
+      (Hme : forall Q x M qs y,
+          y <> x -> ~ In y (assertion_vars Q) ->
+          Pr (wp_meas Σ M qs y (assertion_subst Q x (e_var y)))
+             <{ x <- M @ qs }> (and_eq Q x y))
+      (Hsq : forall Q1 Q2 Q3 L1 L2,
+          Σ ⊢ₗ {{ Q1 }} L1 {{ Q2 }} -> Pr Q1 L1 Q2 ->
+          Σ ⊢ₗ {{ Q2 }} L2 {{ Q3 }} -> Pr Q2 L2 Q3 ->
+          Pr Q1 <{ L1 ; L2 }> Q3)
+      (Hif : forall Q R b L1 L0,
+          Σ ⊢ₗ {{ and_guard Q b true }} L1 {{ R }} ->
+          Pr (and_guard Q b true) L1 R ->
+          Σ ⊢ₗ {{ and_guard Q b false }} L0 {{ R }} ->
+          Pr (and_guard Q b false) L0 R ->
+          Pr Q <{ if b then L1 else L0 }> R)
+      (Hcq : forall Q Q' R R' L,
+          Q' ⊨[Σ] Q -> Σ ⊢ₗ {{ Q }} L {{ R }} -> Pr Q L R ->
+          R ⊨[Σ] R' -> wf_assertion Σ R' -> Pr Q' L R')
+      (Hba : forall phi B L fam,
+          Forall (fun Api => Σ ⊢ₗ {{ mk_assertion phi (fst Api) }} L
+                                 {{ mk_assertion (snd Api) B }}) fam ->
+          Forall (fun Api => Pr (mk_assertion phi (fst Api)) L
+                                (mk_assertion (snd Api) B)) fam ->
+          ForallOrdPairs (exclusive Σ) (map snd fam) ->
+          (forall s, exists M, qpred_denote Σ s (qsum (map fst fam)) = Some M) ->
+          Pr (mk_assertion phi (qsum (map fst fam))) L
+             (mk_assertion (fdisj (map snd fam)) B))
+      (Hax : forall Q R L y v,
+          ~ In y (lblock_change L) -> ~ In y (lblock_read L) ->
+          Σ ⊢ₗ {{ Q }} L {{ R }} -> Pr Q L R ->
+          Pr (assertion_subst Q y (e_val v)) L (assertion_subst R y (e_val v)))
+      (Q : assertion dim) (L : lblock) (R : assertion dim)
+      (d : Σ ⊢ₗ {{ Q }} L {{ R }}) {struct d} : Pr Q L R :=
+    let rec := local_derivable_ind' Pr Hsk Has Hun Hme Hsq Hif Hcq Hba Hax in
+    match d with
+    | rule_skip _ Q0 => Hsk Q0
+    | rule_assign _ Q0 x e => Has Q0 x e
+    | rule_unitary _ Q0 U qs => Hun Q0 U qs
+    | rule_meas _ Q0 x M qs y h1 h2 => Hme Q0 x M qs y h1 h2
+    | rule_seq _ Q1 Q2 Q3 L1 L2 d1 d2 =>
+        Hsq Q1 Q2 Q3 L1 L2 d1 (rec _ _ _ d1) d2 (rec _ _ _ d2)
+    | rule_if _ Q0 R0 b L1 L0 d1 d0 =>
+        Hif Q0 R0 b L1 L0 d1 (rec _ _ _ d1) d0 (rec _ _ _ d0)
+    | rule_conseq _ Q0 Q' R0 R' L0 h1 d' h2 h3 =>
+        Hcq Q0 Q' R0 R' L0 h1 d' (rec _ _ _ d') h2 h3
+    | rule_branch_accum_l _ phi B L0 fam df hex hdf =>
+        Hba phi B L0 fam df
+            ((fix go (l : list (qpred dim * formula))
+                  (h : Forall (fun Api =>
+                         Σ ⊢ₗ {{ mk_assertion phi (fst Api) }} L0
+                             {{ mk_assertion (snd Api) B }}) l)
+               {struct h}
+               : Forall (fun Api =>
+                   Pr (mk_assertion phi (fst Api)) L0
+                      (mk_assertion (snd Api) B)) l :=
+                match h in Forall _ l0
+                      return Forall (fun Api =>
+                               Pr (mk_assertion phi (fst Api)) L0
+                                  (mk_assertion (snd Api) B)) l0 with
+                | Forall_nil _ => Forall_nil _
+                | Forall_cons x0 hx hl =>
+                    Forall_cons x0 (rec _ _ _ hx) (go _ hl)
+                end) fam df)
+            hex hdf
+    | rule_aux_subst_l _ Q0 R0 L0 y v h1 h2 d' =>
+        Hax Q0 R0 L0 y v h1 h2 d' (rec _ _ _ d')
+    end.
+
 
   (* ================================================================ *)
   (* Aux-Subst groundwork: updating a variable the program neither    *)
@@ -1284,6 +1327,99 @@ Section SoundnessFacts.
                             | f_equal; apply eval_bool_update_notin; exact Hb ]).
       rewrite IH1, IH0 by assumption.
       symmetry. apply upd_ens_app.
+  Qed.
+
+  Lemma denote_sound :
+    wf_interp ->
+    forall (Q R : assertion dim) (L : lblock),
+      Σ ⊢ₗ {{ Q }} L {{ R }} ->
+      forall E, ensemble_ok E ->
+        total_degree Σ Q E <= total_degree Σ R (denote L E).
+  Proof.
+    intros interp_ok.
+    assert (main : forall (Q : assertion dim) (L : lblock) (R : assertion dim),
+               Σ ⊢ₗ {{ Q }} L {{ R }} ->
+               forall E, ensemble_ok E ->
+                 total_degree Σ Q E <= total_degree Σ R (denote L E)).
+    { apply (local_derivable_ind'
+               (fun Q L R => forall E, ensemble_ok E ->
+                  total_degree Σ Q E <= total_degree Σ R (denote L E))).
+      - (* skip *) intros Q0 E HokE; simpl. apply Rle_refl.
+      - (* assign *) intros Q0 x e E HokE; simpl.
+        rewrite total_degree_subst_map. apply Rle_refl.
+      - (* unitary *) intros Q0 U qs E HokE; simpl.
+        rewrite total_degree_wp_unitary_map. apply Rle_refl.
+      - (* meas *) intros Q0 x M qs y Hyx Hyfree E HokE; simpl.
+        rewrite (total_degree_meas_flat interp_ok Q0 x y M qs E Hyx).
+        apply Rle_refl.
+      - (* seq *) intros Q1 Q2 Q3 L1 L2 D1 IH1 D2 IH2 E HokE; simpl.
+        eapply Rle_trans; [apply IH1; exact HokE |].
+        apply IH2, denote_ok; auto.
+      - (* if *) intros Q0 R0 b L1 L0 D1 IH1 D0 IH0 E HokE; simpl.
+        rewrite (total_degree_guard_split Q0 b E), total_degree_app.
+        apply Rplus_le_compat.
+        + apply IH1. unfold ensemble_ok, ensemble_filter.
+          apply Forall_filter_keep. exact HokE.
+        + apply IH0. unfold ensemble_ok, ensemble_filter.
+          apply Forall_filter_keep. exact HokE.
+      - (* conseq — split E on Q''s guards; the guard-failing part costs
+           nothing on the left and is ≥ 0 on the right by wf_assertion R' *)
+        intros Q0 Q' R0 R' L0 Hent1 D IH Hent2 Hwf E HokE; simpl.
+        pose proof (filter_split_perm _ (guards_pass Q') E) as Hsplit.
+        set (Epass := filter (guards_pass Q') E) in *.
+        set (Efail := filter (fun st => negb (guards_pass Q' st)) E) in *.
+        assert (HokEpass : ensemble_ok Epass)
+          by (unfold Epass, ensemble_ok; apply Forall_filter_keep; exact HokE).
+        assert (HokEfail : ensemble_ok Efail)
+          by (unfold Efail, ensemble_ok; apply Forall_filter_keep; exact HokE).
+        assert (Hd0 : total_degree Σ Q' Efail = 0%R)
+          by (unfold Efail; apply total_degree_guards_fail).
+        assert (Hpre : (total_degree Σ Q' Epass <= total_degree Σ Q0 Epass)%R)
+          by (unfold Epass; apply total_degree_entails_pass; assumption).
+        pose proof (IH Epass HokEpass) as Hmid.
+        pose proof (total_degree_entails Σ R0 R' (denote L0 Epass) Hent2 Hwf
+                      (denote_ok interp_ok L0 Epass HokEpass)) as Hpost.
+        pose proof (total_degree_nonneg R' (denote L0 Efail) Hwf
+                      (denote_ok interp_ok L0 Efail HokEfail)) as Hdead.
+        rewrite (total_degree_perm Q' _ _ Hsplit), total_degree_app, Hd0.
+        rewrite (total_degree_perm R' _ _ (denote_perm L0 _ _ Hsplit)).
+        rewrite (total_degree_perm R' _ _ (denote_app L0 Epass Efail)).
+        rewrite total_degree_app.
+        rewrite Rplus_0_r.
+        eapply Rle_trans; [exact Hpre |].
+        eapply Rle_trans; [exact Hmid |].
+        eapply Rle_trans; [exact Hpost |].
+        rewrite <- (Rplus_0_r (total_degree Σ R' (denote L0 Epass))) at 1.
+        apply Rplus_le_compat_l. exact Hdead.
+      - (* Branch-Accum, local: finite additivity, one judgment down.  The
+           pre-effects split the precondition's degree and the exclusive
+           guards split the postcondition's, exactly as in the distributed
+           case — only over [denote L] rather than over terminal ensembles. *)
+        intros phi B L0 fam Hfam IHfam Hex Hdefd E HokE; simpl.
+        rewrite (total_degree_qsum phi (map fst fam) E Hdefd).
+        rewrite (total_degree_fdisj_exclusive (map snd fam) B (denote L0 E) Hex).
+        apply fold_right_Rplus_le; [lra |].
+        rewrite !map_map.
+        clear Hfam Hex Hdefd.
+        revert IHfam; induction fam as [| Api fam' IHf]; intros IHfam;
+          cbn [map].
+        + constructor.
+        + inversion IHfam as [| a l Hhd Htl]; subst.
+          constructor; [ apply Hhd; exact HokE | apply IHf; exact Htl ].
+      - (* Aux-Subst, local: the substitution is a uniform store update, and
+           a block that never mentions [y] commutes with it ([denote_upd]). *)
+        intros Q0 R0 L0 y v Hyc Hyr D IH E HokE; simpl.
+        rewrite !total_degree_subst_map. cbn [eval_expr].
+        replace (map (fun '(s0, r0) => (s0 [ y |-> v ], r0)) E)
+          with (upd_ens y v E)
+          by (unfold upd_ens; apply map_ext; intros [s0 r0]; reflexivity).
+        replace (map (fun '(s0, r0) => (s0 [ y |-> v ], r0)) (denote L0 E))
+          with (upd_ens y v (denote L0 E))
+          by (unfold upd_ens; apply map_ext; intros [s0 r0]; reflexivity).
+        rewrite <- (denote_upd y v L0 E Hyc Hyr).
+        apply IH. unfold upd_ens. apply ensemble_ok_map;
+          [ intros [s0 r0] H; exact H | exact HokE ]. }
+    intros Q R L Hd. apply main; assumption.
   Qed.
 
   Lemma local_step_upd :

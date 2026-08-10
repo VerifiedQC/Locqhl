@@ -49,6 +49,24 @@ Definition wp_meas {dim} (Σ : interp dim) (M : msym) (qs : list qvar) (y : var)
        q_conj (fun vs => snd (i_mm Σ M qs) (nth 0%nat vs 0%nat)) ([e_var y])
               (quantum_part Q) |}.
 
+(** Σ_{i∈J} A_i and ⋁_{i∈J} ψ_i.  Both fold over the whole family: [q_zero]
+    and false are the units, so there is no distinguished first member and
+    the empty family is allowed (it gives the vacuous triple {(φ,0)} P
+    {(false,B)}, whose two degrees are both 0). **)
+Definition qsum {dim} (As : list (qpred dim)) : qpred dim :=
+  fold_right q_add q_zero As.
+
+Definition fdisj (ps : list formula) : formula :=
+  fold_right f_or (f_bexp b_false) ps.
+
+(** ⊨ ¬(ψ_i ∧ ψ_j): the two guards never hold at the same store. **)
+Definition exclusive {dim} (Σ : interp dim) (p q : formula) : Prop :=
+  forall s, formula_holds Σ s p = true -> formula_holds Σ s q = true -> False.
+
+(** Build a cq-assertion (φ, A) from a classical formula and a quantum predicate. **)
+Definition mk_assertion {dim} (p : formula) (A : qpred dim) : assertion dim :=
+  {| classical_part := p; quantum_part := A |}.
+
 (** ** The local proof system ***************************************** *)
 Reserved Notation "Σ '⊢ₗ' '{{' Pre '}}' L '{{' Post '}}'"
   (at level 70, Pre at level 99, L at level 99, Post at level 99).
@@ -99,6 +117,32 @@ Inductive local_derivable {dim} (Σ : interp dim)
     R ⊨[Σ] R' ->
     wf_assertion Σ R' ->
     Σ ⊢ₗ {{ Q' }} L {{ R' }}
+
+(* Branch-Accum, one judgment down.  The distributed rule cannot serve
+   here: it witnesses the branches' exclusivity at the END of a program,
+   whereas the classical fact that separates measurement branches — the
+   [x = y] the Meas rule hands out — is overwritten by the next
+   measurement.  The merge has to happen where the branch is created.
+
+   The definedness side condition is what [valid] supplies for free at the
+   distributed judgment and [denote_sound] does not: [q_add] is undefined
+   as soon as one summand is, and the two sides then part company. *)
+| rule_branch_accum_l : forall phi B L fam,
+    Forall (fun Api => Σ ⊢ₗ {{ mk_assertion phi (fst Api) }} L
+                           {{ mk_assertion (snd Api) B }}) fam ->
+    ForallOrdPairs (exclusive Σ) (map snd fam) ->
+    (forall s, exists M, qpred_denote Σ s (qsum (map fst fam)) = Some M) ->
+    Σ ⊢ₗ {{ mk_assertion phi (qsum (map fst fam)) }} L
+        {{ mk_assertion (fdisj (map snd fam)) B }}
+(* Aux-Subst, one judgment down, for the same reason: pinning the fresh
+   outcome variable to a literal is what makes the branches exclusive, and
+   it has to happen before the next round overwrites the outcome. *)
+| rule_aux_subst_l : forall Q R L y (v : val),
+    ~ In y (lblock_change L) ->
+    ~ In y (lblock_read L) ->
+    Σ ⊢ₗ {{ Q }} L {{ R }} ->
+    Σ ⊢ₗ {{ assertion_subst Q y (e_val v) }} L
+        {{ assertion_subst R y (e_val v) }}
 
 where "Σ '⊢ₗ' '{{' Pre '}}' L '{{' Post '}}'" := (local_derivable Σ Pre L Post).
 
@@ -342,23 +386,6 @@ Qed.
 
 (** ** Helpers for Branch-Accum *************************************** *)
 
-(** Σ_{i∈J} A_i and ⋁_{i∈J} ψ_i.  Both fold over the whole family: [q_zero]
-    and false are the units, so there is no distinguished first member and
-    the empty family is allowed (it gives the vacuous triple {(φ,0)} P
-    {(false,B)}, whose two degrees are both 0). **)
-Definition qsum {dim} (As : list (qpred dim)) : qpred dim :=
-  fold_right q_add q_zero As.
-
-Definition fdisj (ps : list formula) : formula :=
-  fold_right f_or (f_bexp b_false) ps.
-
-(** ⊨ ¬(ψ_i ∧ ψ_j): the two guards never hold at the same store. **)
-Definition exclusive {dim} (Σ : interp dim) (p q : formula) : Prop :=
-  forall s, formula_holds Σ s p = true -> formula_holds Σ s q = true -> False.
-
-(** Build a cq-assertion (φ, A) from a classical formula and a quantum predicate. **)
-Definition mk_assertion {dim} (p : formula) (A : qpred dim) : assertion dim :=
-  {| classical_part := p; quantum_part := A |}.
 
 (** ** The distributed proof system ***********************************
 
