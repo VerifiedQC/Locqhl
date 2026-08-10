@@ -1342,3 +1342,70 @@ Proof.
   - apply rule_comm_done. cbn. split; reflexivity.
   - apply rule_done. exact tdone_terminated.
 Qed.
+
+(** ** The communication row *******************************************
+
+    Two matched pairs, one per direction, then the emptied block.  The
+    assertion mentions neither receive target, so both substitutions are
+    the identity and the row carries [distill_post] straight through. *)
+
+Definition kmid1 (i : nat) : krow :=
+  ⟨ [ chB (S i) ⁇ x ] ⟩ ∥ ⟨ [ chB (S i) ‼ e_var mb ; chA (S i) ⁇ y ] ⟩.
+Definition kmid2 (i : nat) : krow :=
+  ⟨ [ chB (S i) ⁇ x ] ⟩ ∥ ⟨ [ chB (S i) ‼ e_var mb ] ⟩.
+Definition kmid3 (i : nat) : krow :=
+  ⟨ [ chB (S i) ⁇ x ] ⟩ ∥ ⟨ ε ⟩.
+
+(* The blunt [vm_compute] tactic the fixed-round case studies use does not
+   work here: it unfolds [chA (S i)] into symbolic arithmetic.  Keep the
+   channel names folded and settle the comparisons with [eqb_chAB]. *)
+Ltac kchan i :=
+  assert (HAB : (chA (S i) =? chB (S i)) = false) by apply eqb_chAB;
+  assert (HBA : (chB (S i) =? chA (S i)) = false) by apply eqb_chBA;
+  unfold krow_endpoints, krow_actions, krow_chan;
+  cbn [row_flat cblock_chan map app filter caction_chan is_send negb
+       length row_parties existsb];
+  rewrite ?Nat.eqb_refl, ?HAB, ?HBA; cbn; repeat split; reflexivity.
+
+Lemma wf_kmid : forall i, wf_phase (kmid i).
+Proof.
+  intro i. split; [| split].
+  - intros c Hc. unfold kmid, krow_chan in Hc;
+      cbn [row_flat cblock_chan map app caction_chan] in Hc.
+    unfold kmid; destruct Hc as [<-|[<-|[<-|[<-|[]]]]]; kchan i.
+  - vm_compute; repeat constructor; cbn; intuition congruence.
+  - intros v Hv Hw; vm_compute in Hv, Hw; intuition congruence.
+Qed.
+
+Lemma wf_kmid2 : forall i, wf_phase (kmid2 i).
+Proof.
+  intro i. split; [| split].
+  - intros c Hc. unfold kmid2, krow_chan in Hc;
+      cbn [row_flat cblock_chan map app caction_chan] in Hc.
+    unfold kmid2; destruct Hc as [<-|[<-|[]]]; kchan i.
+  - vm_compute; repeat constructor; cbn; intuition congruence.
+  - intros v Hv Hw; vm_compute in Hv, Hw; intuition congruence.
+Qed.
+
+Lemma kmid_comm : forall n k i,
+    Sig n ⊢ₖ {{ distill_post k n }} kmid i {{ distill_post k n }}.
+Proof.
+  intros n k i.
+  replace (distill_post k n)
+    with (assertion_subst (distill_post k n) y (e_var ma)) at 1
+    by reflexivity.
+  apply rule_comm_select with (kmid := kmid1 i) (k' := kmid2 i)
+                              (c := chA (S i)) (e := e_var ma) (x := y).
+  { apply wf_kmid. }
+  { unfold kmid, kmid1; eauto with locc. }
+  { unfold kmid1, kmid2; eauto with locc. }
+  replace (distill_post k n)
+    with (assertion_subst (distill_post k n) x (e_var mb)) at 1
+    by reflexivity.
+  apply rule_comm_select with (kmid := kmid3 i) (k' := kempty)
+                              (c := chB (S i)) (e := e_var mb) (x := x).
+  { apply wf_kmid2. }
+  { unfold kmid2, kmid3; eauto with locc. }
+  { unfold kmid3, kempty; eauto with locc. }
+  apply rule_comm_done. cbn. split; reflexivity.
+Qed.
