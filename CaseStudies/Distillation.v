@@ -906,3 +906,168 @@ Proof.
   - exact (wf_phase_aligned_distill n).
   - exact (wf_phase_independence_distill n).
 Qed.
+
+(** ** Well-formedness of a tail ***************************************
+
+    [rule_par_comp] asks for [wf_program] of the program it cuts, so the
+    induction over rounds needs it of [tround i r] and not only of
+    [distill n].  Same four obligations, same four closed forms — they were
+    stated over a symbolic round window [seq (S i) r] precisely so that
+    both callers fit. *)
+
+Lemma phase_actions_tround : forall i r k,
+    phase_actions (tround i r) k
+    = if Nat.ltb k r
+      then [ chA (S i + k) ‼ e_var ma ; chB (S i + k) ⁇ x ;
+             chB (S i + k) ‼ e_var mb ; chA (S i + k) ⁇ y ]
+      else [].
+Proof.
+  intros i r k. unfold phase_actions, phase_at, phase_row, tround.
+  cbn [row_map row_leaves concat].
+  rewrite comm_at_alice, comm_at_bob.
+  destruct (Nat.ltb k r); reflexivity.
+Qed.
+
+Lemma wf_phase_aligned_tround : forall i r, wf_phase_aligned (tround i r).
+Proof.
+  intros i r k c Hin. rewrite phase_actions_tround in *.
+  destruct (Nat.ltb k r) eqn:Hk; [| cbn in Hin; contradiction].
+  cbn [map caction_chan] in Hin.
+  assert (HA : (chB (S i + k) =? chA (S i + k)) = false)
+    by (apply Nat.eqb_neq; intro H; apply (chAB_neq (S i + k)); symmetry; exact H).
+  assert (HB : (chA (S i + k) =? chB (S i + k)) = false)
+    by (apply Nat.eqb_neq; apply chAB_neq).
+  destruct Hin as [Hc|[Hc|[Hc|[Hc|[]]]]]; rewrite <- Hc;
+    cbn [filter caction_chan]; rewrite ?Nat.eqb_refl, ?HA, ?HB; reflexivity.
+Qed.
+
+Lemma wf_phase_independence_tround : forall i r, wf_phase_independence (tround i r).
+Proof.
+  intros i r k. unfold recv_targets, output_reads, phase_at, phase_row, tround.
+  cbn [row_map row_leaves].
+  rewrite comm_at_alice, comm_at_bob.
+  destruct (Nat.ltb k r); split;
+    solve [ vm_compute; repeat constructor; cbn; intuition congruence
+          | intros v Hv Hw; vm_compute in Hv, Hw; intuition congruence
+          | vm_compute; constructor
+          | intros v Hv; vm_compute in Hv; contradiction ].
+Qed.
+
+Lemma wf_ownership_tround : forall i r, wf_ownership (tround i r).
+Proof.
+  intros i r. unfold tround. cbn [wf_ownership].
+  split; [exact Logic.I | split; [exact Logic.I |]].
+  unfold cross_disjoint, program_change, program_cvar, program_qvar.
+  cbn [row_flat].
+  split; [| split].
+  - intros v Hv Hw. pose proof (alice_change _ _ _ Hv).
+    unfold process_cvar in Hw; apply in_app_or in Hw.
+    destruct Hw as [Hw | Hw];
+      [ pose proof (bob_change _ _ _ Hw) | pose proof (bob_read _ _ _ Hw) ]; lia.
+  - intros v Hv Hw. pose proof (bob_change _ _ _ Hv).
+    unfold process_cvar in Hw; apply in_app_or in Hw.
+    destruct Hw as [Hw | Hw];
+      [ pose proof (alice_change _ _ _ Hw) | pose proof (alice_read _ _ _ Hw) ]; lia.
+  - intros q Hq Hw.
+    exact (ab_qvar_neq q q (alice_qvar _ _ _ Hq) (bob_qvar _ _ _ Hw) eq_refl).
+Qed.
+
+Ltac in_window i r j0 :=
+  replace (Nat.leb (S i) j0) with true by (symmetry; apply Nat.leb_le; lia);
+  replace (Nat.ltb j0 (S i + r)) with true by (symmetry; apply Nat.ltb_lt; lia).
+
+Lemma endpoints_chA_tround : forall i r j0, (S i <= j0 < S i + r)%nat ->
+    filter (fun a => Nat.eqb (caction_chan a) (chA j0)) (program_actions (tround i r))
+    = [ chA j0 ‼ e_var ma ; chA j0 ⁇ y ].
+Proof.
+  intros i r j0 Hj. unfold program_actions, tround. cbn [row_flat].
+  rewrite filter_app, actions_alice, actions_bob, !filter_flat_map.
+  rewrite (flat_map_ext _ (fun j => if Nat.eqb j j0 then [chA j ‼ e_var ma] else []))
+    by (intro j; cbn [filter caction_chan]; rewrite eqb_chA, eqb_chBA;
+        destruct (Nat.eqb j j0); reflexivity).
+  rewrite (flat_map_ext (fun a => filter _ _)
+                        (fun j => if Nat.eqb j j0 then [chA j ⁇ y] else []))
+    by (intro j; cbn [filter caction_chan]; rewrite eqb_chA, eqb_chBA;
+        destruct (Nat.eqb j j0); reflexivity).
+  rewrite !flat_map_pick. in_window i r j0. reflexivity.
+Qed.
+
+Lemma endpoints_chB_tround : forall i r j0, (S i <= j0 < S i + r)%nat ->
+    filter (fun a => Nat.eqb (caction_chan a) (chB j0)) (program_actions (tround i r))
+    = [ chB j0 ⁇ x ; chB j0 ‼ e_var mb ].
+Proof.
+  intros i r j0 Hj. unfold program_actions, tround. cbn [row_flat].
+  rewrite filter_app, actions_alice, actions_bob, !filter_flat_map.
+  rewrite (flat_map_ext _ (fun j => if Nat.eqb j j0 then [chB j ⁇ x] else []))
+    by (intro j; cbn [filter caction_chan]; rewrite eqb_chB, eqb_chAB;
+        destruct (Nat.eqb j j0); reflexivity).
+  rewrite (flat_map_ext (fun a => filter _ _)
+                        (fun j => if Nat.eqb j j0 then [chB j ‼ e_var mb] else []))
+    by (intro j; cbn [filter caction_chan]; rewrite eqb_chB, eqb_chAB;
+        destruct (Nat.eqb j j0); reflexivity).
+  rewrite !flat_map_pick. in_window i r j0. reflexivity.
+Qed.
+
+Lemma chan_range_tround : forall i r c, In c (program_chan (tround i r)) ->
+    exists j0, (S i <= j0 < S i + r)%nat /\ (c = chA j0 \/ c = chB j0).
+Proof.
+  intros i r c Hc. rewrite program_chan_actions in Hc.
+  apply in_map_iff in Hc. destruct Hc as [a [Hca Ha]].
+  unfold program_actions, tround in Ha. cbn [row_flat] in Ha.
+  rewrite actions_alice, actions_bob in Ha.
+  apply in_app_or in Ha; destruct Ha as [Ha | Ha];
+    apply in_flat_map in Ha; destruct Ha as [j [Hj Ha]];
+    apply in_seq in Hj;
+    exists j; split; try lia;
+    destruct Ha as [Ha | [Ha | []]]; subst a;
+    cbn [caction_chan] in Hca; subst c;
+    [ left | right | right | left ]; reflexivity.
+Qed.
+
+Lemma in_chan_alice : forall i r j0, (S i <= j0 < S i + r)%nat ->
+    In (chA j0) (process_chan (alice i r)) /\ In (chB j0) (process_chan (alice i r)).
+Proof.
+  intros i r j0 Hj. rewrite process_chan_actions, actions_alice.
+  split; [ apply in_map_iff; exists (chA j0 ‼ e_var ma)
+         | apply in_map_iff; exists (chB j0 ⁇ x) ];
+    (split; [ reflexivity |]);
+    apply in_flat_map; exists j0; (split; [ apply in_seq; lia |]); cbn; tauto.
+Qed.
+
+Lemma in_chan_bob : forall i r j0, (S i <= j0 < S i + r)%nat ->
+    In (chA j0) (process_chan (bob i r)) /\ In (chB j0) (process_chan (bob i r)).
+Proof.
+  intros i r j0 Hj. rewrite process_chan_actions, actions_bob.
+  split; [ apply in_map_iff; exists (chA j0 ⁇ y)
+         | apply in_map_iff; exists (chB j0 ‼ e_var mb) ];
+    (split; [ reflexivity |]);
+    apply in_flat_map; exists j0; (split; [ apply in_seq; lia |]); cbn; tauto.
+Qed.
+
+Lemma wf_channels_tround : forall i r, wf_channels (tround i r).
+Proof.
+  intros i r c Hc.
+  destruct (chan_range_tround i r c Hc) as [j0 [Hj [-> | ->]]];
+    unfold endpoints_of;
+    [ rewrite endpoints_chA_tround by exact Hj
+    | rewrite endpoints_chB_tround by exact Hj ];
+    (split; [ reflexivity | split; [ reflexivity |]]);
+    unfold parties, tround; cbn [row_parties];
+    destruct (in_chan_alice i r j0 Hj) as [Ha1 Ha2];
+    destruct (in_chan_bob i r j0 Hj) as [Hb1 Hb2];
+    repeat match goal with
+           | |- context[existsb (Nat.eqb ?c) ?l] =>
+               replace (existsb (Nat.eqb c) l) with true
+                 by (symmetry; apply existsb_exists; exists c;
+                     split; [ assumption | apply Nat.eqb_refl ])
+           end; reflexivity.
+Qed.
+
+Lemma wf_program_tround : forall i r, wf_program (tround i r).
+Proof.
+  intros i r. split; [| split; [| split]].
+  - exact (wf_ownership_tround i r).
+  - exact (wf_channels_tround i r).
+  - exact (wf_phase_aligned_tround i r).
+  - exact (wf_phase_independence_tround i r).
+Qed.
