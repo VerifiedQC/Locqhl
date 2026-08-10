@@ -97,26 +97,67 @@ Definition mA (n j v : nat) : Square (2 ^ (4 * S n)) :=
 Definition mB (n j v : nat) : Square (2 ^ (4 * S n)) :=
   pad_u (4 * S n) (Bt j) (Pi v).
 
+(** ONE PARTY's half of a round, read backwards: the weakest precondition
+    of that party's [CNOT ; Meas] at outcome [v].  The two halves touch
+    disjoint qubits, so a round's transformer is their composition, and —
+    when the two outcomes are not correlated — each may be summed on its
+    own.  That is what an idle round needs, and it is why the derivation
+    can keep [distill_post] as the assertion BETWEEN the two halves. *)
+Definition wpA (n j v : nat) (X : Square (2 ^ (4 * S n)))
+  : Square (2 ^ (4 * S n)) :=
+  (cA n j) † × ((mA n j v) † × X × (mA n j v)) × (cA n j).
+
+Definition wpB (n j v : nat) (X : Square (2 ^ (4 * S n)))
+  : Square (2 ^ (4 * S n)) :=
+  (cB n j) † × ((mB n j v) † × X × (mB n j v)) × (cB n j).
+
 (** One round's backward transformer at outcome pair (va, vb): the weakest
     precondition of [CNOT_A ; Meas_A ; CNOT_B ; Meas_B], read outside-in. *)
 Definition round_wp (n j va vb : nat) (X : Square (2 ^ (4 * S n)))
   : Square (2 ^ (4 * S n)) :=
-  (cA n j) † × ((mA n j va) † ×
-    ((cB n j) † × ((mB n j vb) † × X × (mB n j vb)) × (cB n j))
-    × (mA n j va)) × (cA n j).
+  wpA n j va (wpB n j vb X).
 
 Definition round_sum (n j : nat) (X : Square (2 ^ (4 * S n)))
   : Square (2 ^ (4 * S n)) :=
   (round_wp n j 0 0 X .+ round_wp n j 0 1 X)
   .+ (round_wp n j 1 0 X .+ round_wp n j 1 1 X).
 
-(** OPEN 1 — an idle round, [j > k].  The postcondition leaves round [j]
-    free, the four outcome operators sum to the identity there
-    ([Pi_pair_sum]), and the two CNOTs then cancel. *)
+Lemma wpA_plus : forall n j v X Y,
+    wpA n j v (X .+ Y) = wpA n j v X .+ wpA n j v Y.
+Proof.
+  intros n j v X Y. unfold wpA.
+  rewrite Mmult_plus_distr_l, Mmult_plus_distr_r.
+  rewrite Mmult_plus_distr_l, Mmult_plus_distr_r.
+  reflexivity.
+Qed.
+
+(** OPEN 1a/1b — an idle round, [j > k].  The postcondition leaves round
+    [j] free, so on EACH side the two outcome operators sum to the
+    identity on the measured qubit ([Pi_sum]) and the party's CNOT then
+    cancels against the free factor. *)
+Lemma wpA_sum_idle : forall n k j,
+    (k < j)%nat -> (j <= n)%nat ->
+    wpA n j 0 (post_q k n) .+ wpA n j 1 (post_q k n) = post_q k n.
+Admitted.
+
+Lemma wpB_sum_idle : forall n k j,
+    (k < j)%nat -> (j <= n)%nat ->
+    wpB n j 0 (post_q k n) .+ wpB n j 1 (post_q k n) = post_q k n.
+Admitted.
+
+(** The coupled statement, for reference: an idle round as a whole is the
+    identity.  It is not what the derivation uses — the two halves are —
+    but it is the counterpart of OPEN 2 and OPEN 3 below, which cannot be
+    split because there the two outcomes ARE correlated. *)
 Lemma round_sum_idle : forall n k j,
     (k < j)%nat -> (j <= n)%nat ->
     round_sum n j (post_q k n) = post_q k n.
-Admitted.
+Proof.
+  intros n k j H1 H2. unfold round_sum, round_wp.
+  rewrite <- !wpA_plus.
+  rewrite (wpB_sum_idle n k j H1 H2).
+  apply (wpA_sum_idle n k j H1 H2).
+Qed.
 
 (** OPEN 2 — the accepting round, [j = k].  Only the two agreeing outcomes
     survive ([Pi_pair_eq] gives [Ev] on the target pair), and pulling

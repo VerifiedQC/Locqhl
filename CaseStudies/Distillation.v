@@ -140,15 +140,19 @@ Definition head_b : lblock :=
   <{ ib := (e_val 0) ; db := (e_val 0) ; ob := (e_val 0) ;
      CNOT @ [Bk 0; Bt 0] ; mb <- Meas @ [Bt 0] }>.
 
+(** Round [j]'s probe: entangle keep into test, then measure the test half.
+    The derivation treats the probe as a unit — it is the block the
+    outcome variable is fresh for. *)
+Definition probe_a (j : nat) : lblock :=
+  <{ CNOT @ [Ak j; At j] ; ma <- Meas @ [At j] }>.
+Definition probe_b (j : nat) : lblock :=
+  <{ CNOT @ [Bk j; Bt j] ; mb <- Meas @ [Bt j] }>.
+
 (* [l_seq] rather than [<{ _ ; _ }>]: inside the custom entry only an
    atomic constr parses, and [accept_a i] is an application.  Teleportation
    builds [bob_corr] the same way. *)
-Definition mid_a (i : nat) : lblock :=
-  l_seq (accept_a i)
-        <{ CNOT @ [Ak (S i); At (S i)] ; ma <- Meas @ [At (S i)] }>.
-Definition mid_b (i : nat) : lblock :=
-  l_seq (accept_b i)
-        <{ CNOT @ [Bk (S i); Bt (S i)] ; mb <- Meas @ [Bt (S i)] }>.
+Definition mid_a (i : nat) : lblock := l_seq (accept_a i) (probe_a (S i)).
+Definition mid_b (i : nat) : lblock := l_seq (accept_b i) (probe_b (S i)).
 
 Definition dhead : lrow := ⟨ head_a ⟩ ∥ ⟨ head_b ⟩.
 Definition khead : krow := ⟨ [ chA 0 ‼ e_var ma ; chB 0 ⁇ x ] ⟩
@@ -185,6 +189,10 @@ Proof. split; reflexivity. Qed.
 (** ** The Bell-label predicates (paper §5.4.1) ************************ *)
 
 From QuantumLib Require Import Matrix Quantum Pad.
+(* Qualified, as Teleportation takes BellComplete: the matrix side repeats
+   the predicates verbatim, so the two copies are convertible, and keeping
+   it unimported keeps the names from colliding. *)
+From Locqhl.CaseStudies Require DistillationComplete.
 
 Local Open Scope matrix_scope.
 
@@ -427,29 +435,10 @@ Definition acc_at (k n : nat) : assertion (4 * S n) :=
   {| classical_part := f_and Zeros Agree;
      quantum_part   := q_op (fun _ => Some (post_q k n)) nil |}.
 
-(** i > k.  [da = 1], so every remaining accept test takes its else branch,
-    and every remaining probe acts on a round the postcondition leaves
-    free — the weakest precondition of [I] under a unitary is [I], and
-    under a measurement it is [Σ_m M_m† M_m = I].  Induction on [r], with
-    [i] generalised so the step can instantiate the hypothesis at [S i]. *)
-Lemma phase_after : forall n k r i,
-    Sig n ⊢ₚ {{ distill_post k n }} tround i r {{ distill_post k n }}.
-Admitted.
-
-(** i = k.  One [Par-Comp-MP] step: the accept test fires, turning
-    [Zeros /\ Agree] into [Acc k] and leaving the quantum part alone; the
-    rest is [phase_after]. *)
-Lemma phase_accept : forall n k, (k <= n)%nat ->
-    Sig n ⊢ₚ {{ acc_at k n }} tround k (n - k) {{ distill_post k n }}.
-Admitted.
-
-(** i < k.  Induction on [d], the number of rejecting rounds still to come;
-    [i + S d = k] ties it to the round index, because [k - i] is not
-    structurally decreasing and [induction] will not take it. *)
-Lemma phase_reject : forall n k d i,
-    (k <= n)%nat -> (S i + d = k)%nat ->
-    Sig n ⊢ₚ {{ inv_at (S i) k n }} tround i (n - i) {{ distill_post k n }}.
-Admitted.
+(** The three triples themselves — [phase_after], [phase_accept],
+    [phase_reject] — stand at the END of the file: each needs the
+    well-formedness, effect and guard machinery below, and Rocq wants a
+    definition before its use. *)
 
 (** ** Well-formedness of the program (Definition 2.1) *****************
 
@@ -1460,3 +1449,338 @@ Proof.
     [ intros s Hs | intros s Hs | intros s M N Hs ];
     rewrite Hf in Hs; discriminate.
 Qed.
+
+(** ** The probe of an idle round *************************************
+
+    Round [j = S i] comes after the accepting round, so [post_q k n] leaves
+    its four qubits free.  That is what lets the two parties be handled
+    SEPARATELY: neither outcome constrains the other, each party's two
+    outcomes already sum to the identity on its own qubit, and the
+    assertion between the two halves is [distill_post k n] again.  (In the
+    accepting and rejecting rounds the outcomes are correlated and the
+    merge has to span both halves.)
+
+    Each half is [accept ; CNOT ; Meas].  The accept test is a no-op
+    ([accept_a_noop]), and the probe takes four steps, read backwards:
+
+      Meas          fresh [ya]                    appends [ma = ya]
+      Unitary       backwards                     conjugates by CNOT
+      Aux-Subst     pins [ya := v]                closes the branch
+      Branch-Accum  sums [v = 0, 1]               yields [ma=0 ∨ ma=1]
+
+    Both of the last two are used at the LOCAL judgment.  At [⊢ₚ] neither
+    applies: [ma = ya] is what separates the branches, and the next round's
+    measurement overwrites it long before the program terminates. *)
+
+Definition psi_a (k v : nat) : formula :=
+  f_and (Acc k) (f_eq (e_var ma) (e_val v)).
+Definition psi_b (k v : nat) : formula :=
+  f_and (Acc k) (f_eq (e_var mb) (e_val v)).
+
+(** The branch precondition, exactly as Unitary/Meas/Aux-Subst hand it out.
+    After the substitution the outcome is a literal, so the qpred no longer
+    reads the store — which is what makes the sum below a matrix fact. *)
+Definition Apre (n k j v : nat) : assertion (4 * S n) :=
+  assertion_subst
+    (wp_unitary (i_uu (Sig n) CNOT (Ak j :: At j :: nil))
+       (wp_meas (Sig n) Meas (At j :: nil) ya
+          (assertion_subst (distill_post k n) ma (e_var ya))))
+    ya (e_val v).
+
+Definition Bpre (n k j v : nat) : assertion (4 * S n) :=
+  assertion_subst
+    (wp_unitary (i_uu (Sig n) CNOT (Bk j :: Bt j :: nil))
+       (wp_meas (Sig n) Meas (Bt j :: nil) yb
+          (assertion_subst (distill_post k n) mb (e_var yb))))
+    yb (e_val v).
+
+Definition fam_a (n k j : nat) : list (qpred (4 * S n) * formula) :=
+  (quantum_part (Apre n k j 0%nat), psi_a k 0%nat)
+  :: (quantum_part (Apre n k j 1%nat), psi_a k 1%nat) :: nil.
+
+Definition fam_b (n k j : nat) : list (qpred (4 * S n) * formula) :=
+  (quantum_part (Bpre n k j 0%nat), psi_b k 0%nat)
+  :: (quantum_part (Bpre n k j 1%nat), psi_b k 1%nat) :: nil.
+
+(** *** The classical side of the merge ******************************* *)
+
+Lemma psi_a_ma : forall n k v s,
+    formula_holds (Sig n) s (psi_a k v) = true -> s ma = v.
+Proof.
+  intros n k v s H. unfold psi_a in H.
+  change (formula_holds (Sig n) s (f_and (Acc k) (f_eq (e_var ma) (e_val v))))
+    with (andb (formula_holds (Sig n) s (Acc k)) (Nat.eqb (s ma) v)) in H.
+  apply andb_true_iff in H as [_ H]. apply Nat.eqb_eq in H. exact H.
+Qed.
+
+Lemma psi_b_mb : forall n k v s,
+    formula_holds (Sig n) s (psi_b k v) = true -> s mb = v.
+Proof.
+  intros n k v s H. unfold psi_b in H.
+  change (formula_holds (Sig n) s (f_and (Acc k) (f_eq (e_var mb) (e_val v))))
+    with (andb (formula_holds (Sig n) s (Acc k)) (Nat.eqb (s mb) v)) in H.
+  apply andb_true_iff in H as [_ H]. apply Nat.eqb_eq in H. exact H.
+Qed.
+
+Lemma psi_a_acc : forall n k v s,
+    formula_holds (Sig n) s (psi_a k v) = true ->
+    formula_holds (Sig n) s (Acc k) = true.
+Proof.
+  intros n k v s H. unfold psi_a in H.
+  change (formula_holds (Sig n) s (f_and (Acc k) (f_eq (e_var ma) (e_val v))))
+    with (andb (formula_holds (Sig n) s (Acc k)) (Nat.eqb (s ma) v)) in H.
+  apply andb_true_iff in H as [H _]. exact H.
+Qed.
+
+Lemma psi_b_acc : forall n k v s,
+    formula_holds (Sig n) s (psi_b k v) = true ->
+    formula_holds (Sig n) s (Acc k) = true.
+Proof.
+  intros n k v s H. unfold psi_b in H.
+  change (formula_holds (Sig n) s (f_and (Acc k) (f_eq (e_var mb) (e_val v))))
+    with (andb (formula_holds (Sig n) s (Acc k)) (Nat.eqb (s mb) v)) in H.
+  apply andb_true_iff in H as [H _]. exact H.
+Qed.
+
+(** [⋁ψ ⊨ φ] whenever every disjunct entails φ — the classical half of the
+    Conseq step that follows Branch-Accum. *)
+Lemma fdisj_elim : forall d (S0 : interp d) s ps (q : formula),
+    Forall (fun p => formula_holds S0 s p = true ->
+                     formula_holds S0 s q = true) ps ->
+    formula_holds S0 s (fdisj ps) = true ->
+    formula_holds S0 s q = true.
+Proof.
+  intros d S0 s ps q HF. induction HF as [| p ps' Hp HF' IH].
+  - intro H. cbn in H. discriminate.
+  - intro H.
+    change (formula_holds S0 s (fdisj (p :: ps')))
+      with (orb (formula_holds S0 s p) (formula_holds S0 s (fdisj ps'))) in H.
+    apply orb_true_iff in H as [H | H]; [ apply Hp | apply IH ]; exact H.
+Qed.
+
+(** *** The quantum side of the merge ********************************* *)
+
+(** [DistillationComplete] repeats the predicates verbatim so that its
+    obligations close by conversion here.  Nothing enforces that but this
+    check: if the two copies ever drift apart, [reflexivity] stops working
+    and the [change] steps below break with it. *)
+Lemma post_q_C : forall k n, post_q k n = DistillationComplete.post_q k n.
+Proof. reflexivity. Qed.
+
+Lemma qsum_a_idle : forall n k j, (k < j)%nat -> (j <= n)%nat -> forall s,
+    qpred_denote (Sig n) s (qsum (map fst (fam_a n k j))) = Some (post_q k n).
+Proof.
+  intros n k j Hkj Hjn s.
+  change (qpred_denote (Sig n) s (qsum (map fst (fam_a n k j))))
+    with (Some (DistillationComplete.wpA n j 0 (DistillationComplete.post_q k n)
+                .+ (DistillationComplete.wpA n j 1 (DistillationComplete.post_q k n)
+                    .+ @Zero (2 ^ (4 * S n)) (2 ^ (4 * S n))))).
+  rewrite Mplus_0_r, (DistillationComplete.wpA_sum_idle n k j Hkj Hjn).
+  reflexivity.
+Qed.
+
+Lemma qsum_b_idle : forall n k j, (k < j)%nat -> (j <= n)%nat -> forall s,
+    qpred_denote (Sig n) s (qsum (map fst (fam_b n k j))) = Some (post_q k n).
+Proof.
+  intros n k j Hkj Hjn s.
+  change (qpred_denote (Sig n) s (qsum (map fst (fam_b n k j))))
+    with (Some (DistillationComplete.wpB n j 0 (DistillationComplete.post_q k n)
+                .+ (DistillationComplete.wpB n j 1 (DistillationComplete.post_q k n)
+                    .+ @Zero (2 ^ (4 * S n)) (2 ^ (4 * S n))))).
+  rewrite Mplus_0_r, (DistillationComplete.wpB_sum_idle n k j Hkj Hjn).
+  reflexivity.
+Qed.
+
+(** *** The two conseq steps ****************************************** *)
+
+Lemma entails_q_eq : forall d (S0 : interp d) (phi psi : formula) (A B : qpred d),
+    (forall s, formula_holds S0 s phi = true -> formula_holds S0 s psi = true) ->
+    (forall s, formula_holds S0 s phi = true ->
+               qpred_denote S0 s A = qpred_denote S0 s B) ->
+    mk_assertion phi A ⊨[S0] mk_assertion psi B.
+Proof.
+  intros d S0 phi psi A B Hc Hq. split; [| split].
+  - exact Hc.
+  - intros s Hs [M HM]. exists M. cbn in HM |- *.
+    rewrite <- (Hq s Hs). exact HM.
+  - intros s M N Hs HM HN. cbn in HM, HN.
+    rewrite (Hq s Hs) in HM. rewrite HM in HN. inversion HN. apply lowner_refl.
+Qed.
+
+(** *** One branch, and the merge ************************************* *)
+
+Lemma fresh_post : forall k n (z : var), (10 <= z)%nat ->
+    ~ In z (assertion_vars (distill_post k n)).
+Proof.
+  intros k n z Hz H.
+  unfold distill_post, assertion_vars, Acc in H.
+  cbn [classical_part quantum_part formula_vars expr_vars qpred_vars
+       flat_map app In] in H.
+  unfold ia, da, oa, ib, db, ob in H. intuition lia.
+Qed.
+
+Lemma probe_a_branch : forall n k j v,
+    Sig n ⊢ₗ {{ mk_assertion (Acc k) (quantum_part (Apre n k j v)) }}
+             probe_a j
+             {{ mk_assertion (psi_a k v) (quantum_part (distill_post k n)) }}.
+Proof.
+  intros n k j v.
+  replace (mk_assertion (Acc k) (quantum_part (Apre n k j v)))
+     with (Apre n k j v) by reflexivity.
+  replace (mk_assertion (psi_a k v) (quantum_part (distill_post k n)))
+     with (assertion_subst (and_eq (distill_post k n) ma ya) ya (e_val v))
+     by reflexivity.
+  unfold Apre, probe_a.
+  apply rule_aux_subst_l.
+  - cbn [lblock_change app In]. unfold ya, ma. intuition lia.
+  - cbn [lblock_read app In]. intuition.
+  - eapply rule_seq; [ apply rule_unitary | apply rule_meas ].
+    + unfold ya, ma. lia.
+    + apply fresh_post. unfold ya; lia.
+Qed.
+
+Lemma probe_b_branch : forall n k j v,
+    Sig n ⊢ₗ {{ mk_assertion (Acc k) (quantum_part (Bpre n k j v)) }}
+             probe_b j
+             {{ mk_assertion (psi_b k v) (quantum_part (distill_post k n)) }}.
+Proof.
+  intros n k j v.
+  replace (mk_assertion (Acc k) (quantum_part (Bpre n k j v)))
+     with (Bpre n k j v) by reflexivity.
+  replace (mk_assertion (psi_b k v) (quantum_part (distill_post k n)))
+     with (assertion_subst (and_eq (distill_post k n) mb yb) yb (e_val v))
+     by reflexivity.
+  unfold Bpre, probe_b.
+  apply rule_aux_subst_l.
+  - cbn [lblock_change app In]. unfold yb, mb. intuition lia.
+  - cbn [lblock_read app In]. intuition.
+  - eapply rule_seq; [ apply rule_unitary | apply rule_meas ].
+    + unfold yb, mb. lia.
+    + apply fresh_post. unfold yb; lia.
+Qed.
+
+Lemma probe_a_idle : forall n k j,
+    (k <= n)%nat -> (k < j)%nat -> (j <= n)%nat ->
+    Sig n ⊢ₗ {{ distill_post k n }} probe_a j {{ distill_post k n }}.
+Proof.
+  intros n k j Hkn Hkj Hjn.
+  eapply rule_conseq with
+    (Q := mk_assertion (Acc k) (qsum (map fst (fam_a n k j))))
+    (R := mk_assertion (fdisj (map snd (fam_a n k j)))
+                       (quantum_part (distill_post k n))).
+  - apply entails_q_eq.
+    + intros s H; exact H.
+    + intros s _. rewrite (qsum_a_idle n k j Hkj Hjn s). reflexivity.
+  - apply rule_branch_accum_l.
+    + repeat constructor; apply probe_a_branch.
+    + repeat constructor. intros s H0 H1.
+      apply psi_a_ma in H0. apply psi_a_ma in H1. lia.
+    + intros s. exists (post_q k n). apply qsum_a_idle; assumption.
+  - apply entails_q_eq.
+    + intros s H. apply (fdisj_elim _ (Sig n) s (map snd (fam_a n k j)) (Acc k));
+        [| exact H].
+      repeat constructor; intro H'; eapply psi_a_acc; exact H'.
+    + intros s _. reflexivity.
+  - apply wf_distill_post; exact Hkn.
+Qed.
+
+Lemma probe_b_idle : forall n k j,
+    (k <= n)%nat -> (k < j)%nat -> (j <= n)%nat ->
+    Sig n ⊢ₗ {{ distill_post k n }} probe_b j {{ distill_post k n }}.
+Proof.
+  intros n k j Hkn Hkj Hjn.
+  eapply rule_conseq with
+    (Q := mk_assertion (Acc k) (qsum (map fst (fam_b n k j))))
+    (R := mk_assertion (fdisj (map snd (fam_b n k j)))
+                       (quantum_part (distill_post k n))).
+  - apply entails_q_eq.
+    + intros s H; exact H.
+    + intros s _. rewrite (qsum_b_idle n k j Hkj Hjn s). reflexivity.
+  - apply rule_branch_accum_l.
+    + repeat constructor; apply probe_b_branch.
+    + repeat constructor. intros s H0 H1.
+      apply psi_b_mb in H0. apply psi_b_mb in H1. lia.
+    + intros s. exists (post_q k n). apply qsum_b_idle; assumption.
+  - apply entails_q_eq.
+    + intros s H. apply (fdisj_elim _ (Sig n) s (map snd (fam_b n k j)) (Acc k));
+        [| exact H].
+      repeat constructor; intro H'; eapply psi_b_acc; exact H'.
+    + intros s _. reflexivity.
+  - apply wf_distill_post; exact Hkn.
+Qed.
+
+(** The local row of an idle round: accept (a no-op), probe (the merge),
+    on each side in turn. *)
+Lemma disj_dmid : forall i, lrow_disj (dmid i).
+Proof.
+  intro i; unfold dmid, lrow_disj, DisjMP.
+  cbn [row_leaves app].
+  constructor; [ constructor; [| constructor] | constructor; [constructor | constructor] ].
+  unfold non_interfering, mid_a, mid_b, accept_a, accept_b, probe_a, probe_b.
+  cbn [lblock_change lblock_read lblock_qvar bexpr_vars expr_vars app flat_map].
+  unfold ia, da, oa, ma, x, ib, db, ob, mb, y, Ak, At, Bk, Bt.
+  repeat split; intros v Hv Hw; cbn in Hv, Hw; intuition lia.
+Qed.
+
+Lemma dmid_local_idle : forall n k i,
+    (k <= n)%nat -> (k < S i)%nat -> (S i <= n)%nat ->
+    Sig n ⊢ₗ {{ distill_post k n }} lseq (dmid i) {{ distill_post k n }}.
+Proof.
+  intros n k i Hkn Hki Hin. cbn [lseq dmid].
+  unfold mid_a, mid_b.
+  eapply rule_seq with (Q2 := distill_post k n).
+  - eapply rule_seq with (Q2 := distill_post k n).
+    + apply accept_a_noop; exact Hkn.
+    + apply probe_a_idle; assumption.
+  - eapply rule_seq with (Q2 := distill_post k n).
+    + apply accept_b_noop; exact Hkn.
+    + apply probe_b_idle; assumption.
+Qed.
+
+(** ** The three phases of the derivation ******************************
+
+    Stated in the specification section above; proved here, where the
+    machinery they stand on is in scope. *)
+
+(** i > k.  [da = 1], so every remaining accept test takes its else branch,
+    and every remaining probe acts on a round the postcondition leaves
+    free — the weakest precondition of [I] under a unitary is [I], and
+    under a measurement it is [Σ_m M_m† M_m = I].  Induction on [r], with
+    [i] generalised so the step can instantiate the hypothesis at [S i].
+
+    [i + r <= n] says round [i + r], the last one this tail probes, is a
+    round of the program; the case study never needs the triple outside
+    that range, and [wpA_sum_idle] is a statement about a round that
+    exists. *)
+Lemma phase_after : forall n k r i,
+    (k <= n)%nat -> (k <= i)%nat -> (i + r <= n)%nat ->
+    Sig n ⊢ₚ {{ distill_post k n }} tround i r {{ distill_post k n }}.
+Proof.
+  intros n k r. induction r as [| r' IH]; intros i Hkn Hki Hir.
+  - apply phase_after_base; exact Hkn.
+  - eapply rule_par_comp with (d := dmid i) (k := kmid i) (t := tround (S i) r')
+                              (Q1 := distill_post k n) (Q2 := distill_post k n).
+    + exact (cut_step i r').
+    + exact (wf_program_tround i (S r')).
+    + apply wf_distill_post; exact Hkn.
+    + apply wf_distill_post; exact Hkn.
+    + apply rule_par_disjoint;
+        [ apply disj_dmid | apply dmid_local_idle; lia ].
+    + apply kmid_comm.
+    + apply IH; lia.
+Qed.
+
+(** i = k.  One [Par-Comp-MP] step: the accept test fires, turning
+    [Zeros /\ Agree] into [Acc k] and leaving the quantum part alone; the
+    rest is [phase_after]. *)
+Lemma phase_accept : forall n k, (k <= n)%nat ->
+    Sig n ⊢ₚ {{ acc_at k n }} tround k (n - k) {{ distill_post k n }}.
+Admitted.
+
+(** i < k.  Induction on [d], the number of rejecting rounds still to come;
+    [i + S d = k] ties it to the round index, because [k - i] is not
+    structurally decreasing and [induction] will not take it. *)
+Lemma phase_reject : forall n k d i,
+    (k <= n)%nat -> (S i + d = k)%nat ->
+    Sig n ⊢ₚ {{ inv_at (S i) k n }} tround i (n - i) {{ distill_post k n }}.
+Admitted.
