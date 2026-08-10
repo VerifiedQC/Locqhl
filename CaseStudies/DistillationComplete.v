@@ -519,6 +519,12 @@ Lemma WF_kn_Rej : forall j, WF_Matrix (kron_n j Rej).
 Proof. intro j. apply WF_kron_n; auto with wf_db. Qed.
 #[local] Hint Resolve WF_kron_n WF_kn_NeqSub WF_kn_Rej : wf_db.
 
+Lemma WF_wpA4 : forall v X, WF_Matrix X -> WF_Matrix (wpA4 v X).
+Proof. intros v X HX. unfold wpA4; repeat apply WF_mult; auto with wf_db. Qed.
+Lemma WF_wpB4 : forall v X, WF_Matrix X -> WF_Matrix (wpB4 v X).
+Proof. intros v X HX. unfold wpB4; repeat apply WF_mult; auto with wf_db. Qed.
+#[local] Hint Resolve WF_wpA4 WF_wpB4 : wf_db.
+
 Lemma pow16_split : forall a b, (16 ^ a * 16 * 16 ^ b)%nat = (16 ^ (a + 1 + b))%nat.
 Proof. intros a b. rewrite !Nat.pow_add_r; cbn [Nat.pow]; ring. Qed.
 
@@ -555,23 +561,58 @@ Qed.
 
 (** A rejecting round [j < k]: block [j] carries [NeqSub] afterwards and
     [Rej] before, with everything to its right unchanged. *)
-(** The rejecting round's split — [inv_q (S j) k n = L ⊗ NeqSub ⊗ R] and
-    [inv_q j k n = L ⊗ Rej ⊗ R] with a common [L] and [R] — is the one
-    piece still missing, and with it the four obligations below.  It is
-    not a mathematical gap: the two equations hold by [kron_assoc] alone.
-    What is unfinished is the index bookkeeping, [16 ^ (S j)] against
-    [16 ^ j * 16] against [16 * 16 ^ j], and the matching associativity of
-    the nat products a kron records. *)
+(* All five dimensions are variables, so nothing can mismatch: this is the
+   one shape the regrouping ever needs. *)
+Lemma kron5_regroup : forall a b c d e (A : Square a) (B : Square b)
+                             (C : Square c) (D : Square d) (E : Square e),
+    WF_Matrix A -> WF_Matrix B -> WF_Matrix C -> WF_Matrix D -> WF_Matrix E ->
+    A ⊗ B ⊗ C ⊗ D ⊗ E = A ⊗ B ⊗ (C ⊗ D ⊗ E).
+Proof.
+  intros. rewrite !kron_assoc by auto with wf_db.
+  rewrite !Nat.mul_assoc. reflexivity.
+Qed.
 
-(** ** The four obligations *******************************************
+Lemma kron5_regroup' : forall a b c d e (A : Square a) (B : Square b)
+                              (C : Square c) (D : Square d) (E : Square e),
+    WF_Matrix A -> WF_Matrix B -> WF_Matrix C -> WF_Matrix D -> WF_Matrix E ->
+    A ⊗ (B ⊗ C) ⊗ D ⊗ E = A ⊗ B ⊗ (C ⊗ D ⊗ E).
+Proof.
+  intros. rewrite !kron_assoc by auto with wf_db.
+  rewrite !Nat.mul_assoc. reflexivity.
+Qed.
 
-    Each is now one localisation step away: [post_q_idle] / [acc_split] /
-    [rej_split] put the predicate in the [L ⊗ X ⊗ R] form, [wpA_local] /
-    [wpB_local] push the round's operators onto the middle factor, and the
-    four [core_*] identities above do the rest.  What is still open is the
-    index bookkeeping of that last step — QuantumLib records a kron's
-    dimension arguments syntactically, and [16 ^ (S j)], [16 ^ j * 16] and
-    [16 * 16 ^ j] are three different terms for one number. *)
+Lemma rej_split : forall j k n, (j < k)%nat -> (k <= n)%nat ->
+    exists R : Square (16 ^ (n - j)),
+      WF_Matrix R
+      /\ inv_q (S j) k n = kron_n j NeqSub ⊗ NeqSub ⊗ R
+      /\ inv_q j k n     = kron_n j NeqSub ⊗ Rej ⊗ R.
+Proof.
+  intros j k n Hjk Hkn.
+  exists (kron_n (k - S j) Rej ⊗ Pass ⊗ I (16 ^ (n - k))).
+  assert (Hl : (16 ^ (n - j))%nat = (16 ^ (k - S j) * 16 * 16 ^ (n - k))%nat)
+    by (rewrite pow16_split; f_equal; lia).
+  rewrite Hl.
+  split; [ solve [auto 30 with wf_db] |]. split.
+  - unfold inv_q. rewrite kron_n_I_gen.
+    replace (16 ^ S j)%nat with (16 ^ j * 16)%nat by (cbn [Nat.pow]; ring).
+    rewrite kron_n_S.
+    apply kron5_regroup; auto 30 with wf_db.
+  - unfold inv_q. rewrite kron_n_I_gen.
+    replace (k - j)%nat with (S (k - S j)) by lia.
+    rewrite kron_n_assoc by auto 30 with wf_db.
+    apply kron5_regroup'; auto 30 with wf_db.
+Qed.
+
+(* Again all dimensions are variables, so the pattern cannot fail to
+   match on an index. *)
+Lemma kron3_plus : forall a b c (L : Square a) (X Y : Square b) (R : Square c),
+    L ⊗ X ⊗ R .+ L ⊗ Y ⊗ R = L ⊗ (X .+ Y) ⊗ R.
+Proof.
+  intros a b c L X Y R.
+  rewrite <- kron_plus_distr_r, <- kron_plus_distr_l. reflexivity.
+Qed.
+
+(** ** The four obligations ******************************************* *)
 
 Lemma core_accept' : wpA4 0 (wpB4 0 EqSub) .+ wpA4 1 (wpB4 1 EqSub) = Pass.
 Proof. exact core_accept. Qed.
@@ -582,24 +623,48 @@ Proof. exact core_reject. Qed.
 Lemma wpA_sum_idle : forall n k j,
     (k < j)%nat -> (j <= n)%nat ->
     wpA n j 0 (post_q k n) .+ wpA n j 1 (post_q k n) = post_q k n.
-Admitted.
+Proof.
+  intros n k j Hkj Hjn.
+  destruct (post_q_idle k n j Hkj Hjn) as [L [HL HP]].
+  rewrite HP. rewrite <- (dim16 j n Hjn).
+  rewrite !wpA_local by (try lia; auto with wf_db).
+  rewrite kron3_plus, core_idleA. reflexivity.
+Qed.
 
 Lemma wpB_sum_idle : forall n k j,
     (k < j)%nat -> (j <= n)%nat ->
     wpB n j 0 (post_q k n) .+ wpB n j 1 (post_q k n) = post_q k n.
-Admitted.
+Proof.
+  intros n k j Hkj Hjn.
+  destruct (post_q_idle k n j Hkj Hjn) as [L [HL HP]].
+  rewrite HP. rewrite <- (dim16 j n Hjn).
+  rewrite !wpB_local by (try lia; auto with wf_db).
+  rewrite kron3_plus, core_idleB. reflexivity.
+Qed.
 
 Lemma round_sum_accept : forall n k,
     (k <= n)%nat ->
     (round_wp n k 0 0 (post_q k n) .+ round_wp n k 1 1 (post_q k n))
     = inv_q k k n.
-Admitted.
+Proof.
+  intros n k Hk. destruct (acc_split k n Hk) as [HP HI].
+  rewrite HP, HI. rewrite <- (dim16 k n Hk). unfold round_wp.
+  rewrite !wpB_local by (try lia; auto with wf_db).
+  rewrite !wpA_local by (try lia; auto with wf_db).
+  rewrite kron3_plus, core_accept'. reflexivity.
+Qed.
 
 Lemma round_sum_reject : forall n k j,
     (j < k)%nat -> (k <= n)%nat ->
     (round_wp n j 0 1 (inv_q (S j) k n) .+ round_wp n j 1 0 (inv_q (S j) k n))
     = inv_q j k n.
-Admitted.
+Proof.
+  intros n k j Hjk Hkn. destruct (rej_split j k n Hjk Hkn) as [R [HR [H1 H2]]].
+  rewrite H1, H2. rewrite <- (dim16 j n ltac:(lia)). unfold round_wp.
+  rewrite !wpB_local by (try lia; auto with wf_db).
+  rewrite !wpA_local by (try lia; auto with wf_db).
+  rewrite kron3_plus, core_reject'. reflexivity.
+Qed.
 
 (** An idle round as a whole, from the two halves. *)
 Lemma round_sum_idle : forall n k j,

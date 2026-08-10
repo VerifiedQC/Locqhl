@@ -18,10 +18,7 @@ BASELINE_FILE="scripts/admit-baseline.txt"
 # Files where open proofs are currently tolerated: the distillation case
 # study, whose derivation is still to be written.  Add a file here only
 # alongside a matching bump of the baseline, and lower both as proofs land.
-ALLOWED_OPEN="Core/Soundness.v
-Core/SoundnessFacts.v
-CaseStudies/Teleportation.v
-CaseStudies/DistillationComplete.v"
+ALLOWED_OPEN=""
 
 baseline=$(tr -d '[:space:]' < "$BASELINE_FILE")
 
