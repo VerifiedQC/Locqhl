@@ -1309,3 +1309,36 @@ Proof.
     + apply entails_refl.
     + apply wf_distill_post; exact Hk.
 Qed.
+
+Ltac disjrow :=
+  repeat constructor; repeat split;
+  intros v Hv Hw; vm_compute in Hv, Hw; intuition congruence.
+
+Lemma disj_dlast : forall i, lrow_disj (dlast i).
+Proof. intro i; unfold dlast; disjrow. Qed.
+
+Lemma dlast_local : forall n k i, (k <= n)%nat ->
+    Sig n ⊢ₗ {{ distill_post k n }} lseq (dlast i) {{ distill_post k n }}.
+Proof.
+  intros n k i Hk. cbn [lseq dlast].
+  eapply rule_seq with (Q2 := distill_post k n);
+    [ apply accept_a_noop | apply accept_b_noop ]; exact Hk.
+Qed.
+
+(** The base of the idle-round induction: nothing is left but round [i]'s
+    accept test, which does not fire, an empty communication row, and two
+    terminated leaves.  The first complete Par-Comp-MP of this case study. *)
+Lemma phase_after_base : forall n k i, (k <= n)%nat ->
+    Sig n ⊢ₚ {{ distill_post k n }} tround i 0 {{ distill_post k n }}.
+Proof.
+  intros n k i Hk.
+  eapply rule_par_comp with (d := dlast i) (k := kempty) (t := tdone)
+                            (Q1 := distill_post k n) (Q2 := distill_post k n).
+  - exact (cut_base i).
+  - exact (wf_program_tround i 0).
+  - apply wf_distill_post; exact Hk.
+  - apply wf_distill_post; exact Hk.
+  - apply rule_par_disjoint; [ apply disj_dlast | apply dlast_local; exact Hk ].
+  - apply rule_comm_done. cbn. split; reflexivity.
+  - apply rule_done. exact tdone_terminated.
+Qed.
