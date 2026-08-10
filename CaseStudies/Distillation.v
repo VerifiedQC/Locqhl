@@ -1198,3 +1198,114 @@ Proof.
   unfold NeqSub. change (@projlike (4 * 4) (I 4 ⊗ Od)).
   apply projlike_kron; [apply projlike_I | apply projlike_Od].
 Qed.
+
+(** [16^k · 16 · 16^(n-k) = 2^(4(n+1))] — the arithmetic the phantom index
+    hides.  Needed because [is_effect] at dimension [d] mentions
+    [I (2 ^ d)] and so must see the right number. *)
+Lemma dim_post : forall k n, (k <= n)%nat ->
+    (16 ^ k * 16 * 16 ^ (n - k))%nat = (2 ^ (4 * S n))%nat.
+Proof.
+  intros k n Hk.
+  replace (16 ^ k * 16)%nat with (16 ^ S k)%nat
+    by (cbn [Nat.pow]; apply Nat.mul_comm).
+  rewrite <- Nat.pow_add_r.
+  replace (S k + (n - k))%nat with (S n) by lia.
+  rewrite Nat.pow_mul_r. reflexivity.
+Qed.
+
+(* At the natural index: the three tensor factors, not the 2^(4(n+1)) the
+   definition is ascribed.  [is_effect_post_q] moves across by [dim_post]. *)
+Lemma projlike_post_q : forall k n,
+    @projlike (16 ^ k * 16 * 16 ^ (n - k)) (post_q k n).
+Proof.
+  intros k n. unfold post_q.
+  apply projlike_kron; [apply projlike_kron |].
+  - apply projlike_kron_n, projlike_NeqSub.
+  - apply projlike_EqSub.
+  - apply projlike_kron_n, projlike_I.
+Qed.
+
+Lemma is_effect_post_q : forall k n, (k <= n)%nat ->
+    is_effect (dim := 4 * S n) (post_q k n).
+Proof.
+  intros k n Hk. destruct (projlike_post_q k n) as [HW [Hh Hi]].
+  rewrite (dim_post k n Hk) in HW, Hh, Hi.
+  apply herm_idem_effect; assumption.
+Qed.
+
+Lemma wf_distill_post : forall k n, (k <= n)%nat ->
+    wf_assertion (Sig n) (distill_post k n).
+Proof.
+  intros k n Hk s M HM. cbn in HM. inversion HM; subst.
+  apply is_effect_post_q; exact Hk.
+Qed.
+
+(** ** The idle-round local row **************************************** *)
+
+Lemma acc_guard_a_false : forall n k,
+    and_guard (distill_post k n) guard_a false ⊨[Sig n] distill_post k n.
+Proof.
+  intros n k. split; [| split].
+  - intros s Hs; cbn in Hs; apply andb_true_iff in Hs as [H _]; exact H.
+  - intros s _ Hd; exact Hd.
+  - intros s M N _ HM HN; cbn in HM, HN;
+      rewrite HM in HN; inversion HN; apply lowner_refl.
+Qed.
+
+Lemma acc_guard_b_false : forall n k,
+    and_guard (distill_post k n) guard_b false ⊨[Sig n] distill_post k n.
+Proof.
+  intros n k. split; [| split].
+  - intros s Hs; cbn in Hs; apply andb_true_iff in Hs as [H _]; exact H.
+  - intros s _ Hd; exact Hd.
+  - intros s M N _ HM HN; cbn in HM, HN;
+      rewrite HM in HN; inversion HN; apply lowner_refl.
+Qed.
+
+Lemma acc_guard_b_true : forall n k (R : assertion (4 * S n)),
+    and_guard (distill_post k n) guard_b true ⊨[Sig n] R.
+Proof.
+  intros n k R.
+  assert (Hf : forall s, formula_holds (Sig n) s
+                 (classical_part (and_guard (distill_post k n) guard_b true))
+               = false).
+  { intro s. cbn. destruct (s db) as [| [| d]]; cbn;
+      rewrite ?andb_false_r, ?andb_false_l; reflexivity. }
+  split; [| split];
+    [ intros s Hs | intros s Hs | intros s M N Hs ];
+    rewrite Hf in Hs; discriminate.
+Qed.
+
+Lemma accept_a_noop : forall n k i, (k <= n)%nat ->
+    Sig n ⊢ₗ {{ distill_post k n }} accept_a i {{ distill_post k n }}.
+Proof.
+  intros n k i Hk. apply rule_if.
+  - eapply rule_conseq.
+    + apply acc_guard_a_true.
+    + eapply rule_seq; [apply rule_assign |].
+      eapply rule_seq; [apply rule_assign | apply rule_assign].
+    + apply entails_refl.
+    + apply wf_distill_post; exact Hk.
+  - eapply rule_conseq.
+    + apply acc_guard_a_false.
+    + apply rule_skip.
+    + apply entails_refl.
+    + apply wf_distill_post; exact Hk.
+Qed.
+
+Lemma accept_b_noop : forall n k i, (k <= n)%nat ->
+    Sig n ⊢ₗ {{ distill_post k n }} accept_b i {{ distill_post k n }}.
+Proof.
+  intros n k i Hk. apply rule_if.
+  - eapply rule_conseq.
+    + apply acc_guard_b_true.
+    + eapply rule_seq; [apply rule_assign |].
+      eapply rule_seq; [apply rule_assign | apply rule_assign].
+    + apply entails_refl.
+    + apply wf_distill_post; exact Hk.
+  - eapply rule_conseq.
+    + apply acc_guard_b_false.
+    + apply rule_skip.
+    + apply entails_refl.
+    + apply wf_distill_post; exact Hk.
+Qed.
