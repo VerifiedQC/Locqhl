@@ -377,23 +377,14 @@ Proof.
   - exact (d_local_ops n).
 Qed.
 
-(** ** Paper Theorem 5.4, the acceptance triple ***********************
+(** Paper Theorem 5.4's acceptance triple,
 
-    For a run whose FIRST accepting round is [k]: if the input sits where
-    rounds [0..k-1] fail the bilateral test and round [k] passes it, then
-    the protocol terminates with both parties latched on index [k+1], the
-    already-rejected rounds in the NeqSub frame and round [k] in EqSub.
+      Sig n ⊨ {{ distill_pre k n }} distill n {{ distill_post k n }}   (k <= n),
 
-    This is the [acc] half of Theorem 5.4.  The [good] half replaces
-    [Pass]/[EqSub] by [Good_k]/[Φ00] and is not stated yet.
-
-    Nothing merges the [k]'s: the quantum postcondition depends on [k], so
-    Branch-Accum — which needs one postcondition shared across the family —
-    does not apply.  The paper does not merge them either; the k's meet
-    only in the Werner-input evaluation, which is arithmetic, not a rule. *)
-Theorem distillation_acc : forall (k n : nat), (k <= n)%nat ->
-  Sig n ⊨ {{ distill_pre k n }} distill n {{ distill_post k n }}.
-Admitted.
+    stands at the END of this file as [distillation_acc], with the three
+    phases it decomposes into.  Everything between here and there is what
+    the derivation needs: the specification, well-formedness, the effect
+    machinery, and the local and communication rows. *)
 
 (** ** The three phases of the derivation ******************************
 
@@ -1338,42 +1329,76 @@ Qed.
     assertion mentions neither receive target, so both substitutions are
     the identity and the row carries [distill_post] straight through. *)
 
-Definition kmid1 (i : nat) : krow :=
-  ⟨ [ chB (S i) ⁇ x ] ⟩ ∥ ⟨ [ chB (S i) ‼ e_var mb ; chA (S i) ⁇ y ] ⟩.
-Definition kmid2 (i : nat) : krow :=
-  ⟨ [ chB (S i) ⁇ x ] ⟩ ∥ ⟨ [ chB (S i) ‼ e_var mb ] ⟩.
-Definition kmid3 (i : nat) : krow :=
-  ⟨ [ chB (S i) ⁇ x ] ⟩ ∥ ⟨ ε ⟩.
+(* One rendezvous pair per direction, at an arbitrary round index: the
+   head's phase and a tail round's phase have the same shape, differing
+   only in [j].  [khead = krow_at 0] and [kmid i = krow_at (S i)], both
+   definitionally. *)
+Definition krow_at (j : nat) : krow :=
+  ⟨ [ chA j ‼ e_var ma ; chB j ⁇ x ] ⟩ ∥ ⟨ [ chB j ‼ e_var mb ; chA j ⁇ y ] ⟩.
+
+Definition krow1 (j : nat) : krow :=
+  ⟨ [ chB j ⁇ x ] ⟩ ∥ ⟨ [ chB j ‼ e_var mb ; chA j ⁇ y ] ⟩.
+Definition krow2 (j : nat) : krow :=
+  ⟨ [ chB j ⁇ x ] ⟩ ∥ ⟨ [ chB j ‼ e_var mb ] ⟩.
+Definition krow3 (j : nat) : krow :=
+  ⟨ [ chB j ⁇ x ] ⟩ ∥ ⟨ ε ⟩.
+
+Lemma khead_at : khead = krow_at 0.
+Proof. reflexivity. Qed.
+
+Lemma kmid_at : forall i, kmid i = krow_at (S i).
+Proof. reflexivity. Qed.
 
 (* The blunt [vm_compute] tactic the fixed-round case studies use does not
-   work here: it unfolds [chA (S i)] into symbolic arithmetic.  Keep the
+   work here: it unfolds [chA j] into symbolic arithmetic.  Keep the
    channel names folded and settle the comparisons with [eqb_chAB]. *)
-Ltac kchan i :=
-  assert (HAB : (chA (S i) =? chB (S i)) = false) by apply eqb_chAB;
-  assert (HBA : (chB (S i) =? chA (S i)) = false) by apply eqb_chBA;
+Ltac kchan j :=
+  assert (HAB : (chA j =? chB j) = false) by apply eqb_chAB;
+  assert (HBA : (chB j =? chA j) = false) by apply eqb_chBA;
   unfold krow_endpoints, krow_actions, krow_chan;
   cbn [row_flat cblock_chan map app filter caction_chan is_send negb
        length row_parties existsb];
   rewrite ?Nat.eqb_refl, ?HAB, ?HBA; cbn; repeat split; reflexivity.
 
-Lemma wf_kmid : forall i, wf_phase (kmid i).
+Lemma wf_krow_at : forall j, wf_phase (krow_at j).
 Proof.
-  intro i. split; [| split].
-  - intros c Hc. unfold kmid, krow_chan in Hc;
+  intro j. split; [| split].
+  - intros c Hc. unfold krow_at, krow_chan in Hc;
       cbn [row_flat cblock_chan map app caction_chan] in Hc.
-    unfold kmid; destruct Hc as [<-|[<-|[<-|[<-|[]]]]]; kchan i.
+    unfold krow_at; destruct Hc as [<-|[<-|[<-|[<-|[]]]]]; kchan j.
   - vm_compute; repeat constructor; cbn; intuition congruence.
   - intros v Hv Hw; vm_compute in Hv, Hw; intuition congruence.
 Qed.
 
-Lemma wf_kmid2 : forall i, wf_phase (kmid2 i).
+Lemma wf_krow2 : forall j, wf_phase (krow2 j).
 Proof.
-  intro i. split; [| split].
-  - intros c Hc. unfold kmid2, krow_chan in Hc;
+  intro j. split; [| split].
+  - intros c Hc. unfold krow2, krow_chan in Hc;
       cbn [row_flat cblock_chan map app caction_chan] in Hc.
-    unfold kmid2; destruct Hc as [<-|[<-|[]]]; kchan i.
+    unfold krow2; destruct Hc as [<-|[<-|[]]]; kchan j.
   - vm_compute; repeat constructor; cbn; intuition congruence.
   - intros v Hv Hw; vm_compute in Hv, Hw; intuition congruence.
+Qed.
+
+(** The row carries any assertion through, with Alice's outcome landing in
+    [y] and Bob's in [x]: the precondition is the postcondition with those
+    two substitutions made. *)
+Lemma krow_comm : forall n j (Q : assertion (4 * S n)),
+    Sig n ⊢ₖ {{ assertion_subst (assertion_subst Q x (e_var mb)) y (e_var ma) }}
+             krow_at j {{ Q }}.
+Proof.
+  intros n j Q.
+  apply rule_comm_select with (kmid := krow1 j) (k' := krow2 j)
+                              (c := chA j) (e := e_var ma) (x := y).
+  { apply wf_krow_at. }
+  { unfold krow_at, krow1; eauto with locc. }
+  { unfold krow1, krow2; eauto with locc. }
+  apply rule_comm_select with (kmid := krow3 j) (k' := kempty)
+                              (c := chB j) (e := e_var mb) (x := x).
+  { apply wf_krow2. }
+  { unfold krow2, krow3; eauto with locc. }
+  { unfold krow3, kempty; eauto with locc. }
+  apply rule_comm_done. cbn. split; reflexivity.
 Qed.
 
 Lemma kmid_comm : forall n k i,
@@ -1381,74 +1406,15 @@ Lemma kmid_comm : forall n k i,
 Proof.
   intros n k i.
   replace (distill_post k n)
-    with (assertion_subst (distill_post k n) y (e_var ma)) at 1
-    by reflexivity.
-  apply rule_comm_select with (kmid := kmid1 i) (k' := kmid2 i)
-                              (c := chA (S i)) (e := e_var ma) (x := y).
-  { apply wf_kmid. }
-  { unfold kmid, kmid1; eauto with locc. }
-  { unfold kmid1, kmid2; eauto with locc. }
-  replace (distill_post k n)
-    with (assertion_subst (distill_post k n) x (e_var mb)) at 1
-    by reflexivity.
-  apply rule_comm_select with (kmid := kmid3 i) (k' := kempty)
-                              (c := chB (S i)) (e := e_var mb) (x := x).
-  { apply wf_kmid2. }
-  { unfold kmid2, kmid3; eauto with locc. }
-  { unfold kmid3, kempty; eauto with locc. }
-  apply rule_comm_done. cbn. split; reflexivity.
+    with (assertion_subst (assertion_subst (distill_post k n) x (e_var mb))
+                          y (e_var ma)) at 1 by reflexivity.
+  apply krow_comm.
 Qed.
 
-(** ** The local row of a round ****************************************
-
-    Backward through [accept ; CNOT ; Meas] on each side.  The assertion is
-    no longer [distill_post] at the intermediate points — the measurement
-    rule appends [ma = ya] and [mb = yb] — so the guard argument has to be
-    stated for any assertion that pins the latch rather than for
-    [distill_post] alone. *)
-
+(** The two auxiliaries the Meas rule is given, one per party.  They are
+    the only variables in the file that the PROGRAM never mentions. *)
 Definition ya : var := 10%nat.
 Definition yb : var := 11%nat.
-
-Lemma guard_a_contra : forall n (Q R : assertion (4 * S n)),
-    (forall s, formula_holds (Sig n) s (classical_part Q) = true ->
-               (s da = 1)%nat) ->
-    and_guard Q guard_a true ⊨[Sig n] R.
-Proof.
-  intros n Q R HQ.
-  assert (Hf : forall s, formula_holds (Sig n) s
-                 (classical_part (and_guard Q guard_a true)) = false).
-  { intro s. cbn [and_guard classical_part].
-    destruct (formula_holds (Sig n) s (classical_part Q)) eqn:E.
-    - pose proof (HQ s E) as Hlatch.
-      cbn [and_guard classical_part formula_holds]. rewrite E. cbn [andb].
-      cbn. destruct (s da) as [| [| d]]; cbn in Hlatch |- *; try lia;
-        rewrite ?andb_false_r; reflexivity.
-    - cbn [and_guard classical_part formula_holds]. rewrite E. reflexivity. }
-  split; [| split];
-    [ intros s Hs | intros s Hs | intros s M N Hs ];
-    rewrite Hf in Hs; discriminate.
-Qed.
-
-Lemma guard_b_contra : forall n (Q R : assertion (4 * S n)),
-    (forall s, formula_holds (Sig n) s (classical_part Q) = true ->
-               (s db = 1)%nat) ->
-    and_guard Q guard_b true ⊨[Sig n] R.
-Proof.
-  intros n Q R HQ.
-  assert (Hf : forall s, formula_holds (Sig n) s
-                 (classical_part (and_guard Q guard_b true)) = false).
-  { intro s. cbn [and_guard classical_part].
-    destruct (formula_holds (Sig n) s (classical_part Q)) eqn:E.
-    - pose proof (HQ s E) as Hlatch.
-      cbn [and_guard classical_part formula_holds]. rewrite E. cbn [andb].
-      cbn. destruct (s db) as [| [| d]]; cbn in Hlatch |- *; try lia;
-        rewrite ?andb_false_r; reflexivity.
-    - cbn [and_guard classical_part formula_holds]. rewrite E. reflexivity. }
-  split; [| split];
-    [ intros s Hs | intros s Hs | intros s M N Hs ];
-    rewrite Hf in Hs; discriminate.
-Qed.
 
 (** ** The probe of an idle round *************************************
 
@@ -1535,12 +1501,14 @@ Qed.
 
 (** *** The pieces of one branch *************************************** *)
 
-(** Every assertion the round's derivation meets has the SAME quantum part
-    — [post_q k n], a constant family — and differs only classically.  The
-    accept tests move the classical part around; the probes leave it
-    alone. *)
-Definition qpost (k n : nat) : qpred (4 * S n) :=
-  q_op (fun _ => Some (post_q k n)) nil.
+(** Every assertion a round's derivation meets has a CONSTANT quantum part
+    — one matrix, not a family read off the store — and the assertions
+    differ only classically.  The accept tests move the classical part
+    around; the probes conjugate the matrix and append one outcome fact. *)
+Definition qconst (n : nat) (M : Square (2 ^ (4 * S n))) : qpred (4 * S n) :=
+  q_op (fun _ => Some M) nil.
+
+Definition qpost (k n : nat) : qpred (4 * S n) := qconst n (post_q k n).
 
 Definition at_q (phi : formula) (k n : nat) : assertion (4 * S n) :=
   mk_assertion phi (qpost k n).
@@ -1550,33 +1518,38 @@ Definition psi_a (phi : formula) (v : nat) : formula :=
 Definition psi_b (phi : formula) (v : nat) : formula :=
   f_and phi (f_eq (e_var mb) (e_val v)).
 
+Lemma wf_qconst : forall n (M : Square (2 ^ (4 * S n))) phi,
+    is_effect (dim := 4 * S n) M ->
+    wf_assertion (Sig n) (mk_assertion phi (qconst n M)).
+Proof.
+  intros n M phi HM s N HN. cbn in HN. inversion HN; subst. exact HM.
+Qed.
+
+Lemma wf_at_q : forall n k phi, (k <= n)%nat ->
+    wf_assertion (Sig n) (at_q phi k n).
+Proof.
+  intros n k phi Hk. apply wf_qconst, is_effect_post_q; exact Hk.
+Qed.
+
 (** The branch precondition, exactly as Unitary/Meas/Aux-Subst hand it out.
     After the substitution the outcome is a literal, so the qpred no longer
     reads the store — which is what makes the sum below a matrix fact.
     Note the quantum part does not depend on [phi]. *)
-Definition Apre (n k j v : nat) (phi : formula) : assertion (4 * S n) :=
+Definition Apre (n j v : nat) (phi : formula) (M : Square (2 ^ (4 * S n)))
+  : assertion (4 * S n) :=
   assertion_subst
     (wp_unitary (i_uu (Sig n) CNOT (Ak j :: At j :: nil))
        (wp_meas (Sig n) Meas (At j :: nil) ya
-          (assertion_subst (at_q phi k n) ma (e_var ya))))
+          (assertion_subst (mk_assertion phi (qconst n M)) ma (e_var ya))))
     ya (e_val v).
 
-Definition Bpre (n k j v : nat) (phi : formula) : assertion (4 * S n) :=
+Definition Bpre (n j v : nat) (phi : formula) (M : Square (2 ^ (4 * S n)))
+  : assertion (4 * S n) :=
   assertion_subst
     (wp_unitary (i_uu (Sig n) CNOT (Bk j :: Bt j :: nil))
        (wp_meas (Sig n) Meas (Bt j :: nil) yb
-          (assertion_subst (at_q phi k n) mb (e_var yb))))
+          (assertion_subst (mk_assertion phi (qconst n M)) mb (e_var yb))))
     yb (e_val v).
-
-Definition fam_a (n k j : nat) (phi : formula)
-  : list (qpred (4 * S n) * formula) :=
-  (quantum_part (Apre n k j 0%nat phi), psi_a phi 0%nat)
-  :: (quantum_part (Apre n k j 1%nat phi), psi_a phi 1%nat) :: nil.
-
-Definition fam_b (n k j : nat) (phi : formula)
-  : list (qpred (4 * S n) * formula) :=
-  (quantum_part (Bpre n k j 0%nat phi), psi_b phi 0%nat)
-  :: (quantum_part (Bpre n k j 1%nat phi), psi_b phi 1%nat) :: nil.
 
 (** *** The classical side of the merge ******************************* *)
 
@@ -1634,43 +1607,6 @@ Proof.
     apply orb_true_iff in H as [H | H]; [ apply Hp | apply IH ]; exact H.
 Qed.
 
-(** *** The quantum side of the merge ********************************* *)
-
-(** [DistillationComplete] repeats the predicates verbatim so that its
-    obligations close by conversion here.  Nothing enforces that but this
-    check: if the two copies ever drift apart, [reflexivity] stops working
-    and the [change] steps below break with it. *)
-Lemma post_q_C : forall k n, post_q k n = DistillationComplete.post_q k n.
-Proof. reflexivity. Qed.
-
-Lemma qsum_a_idle : forall n k j phi,
-    (k < j)%nat -> (j <= n)%nat -> forall s,
-    qpred_denote (Sig n) s (qsum (map fst (fam_a n k j phi)))
-    = Some (post_q k n).
-Proof.
-  intros n k j phi Hkj Hjn s.
-  change (qpred_denote (Sig n) s (qsum (map fst (fam_a n k j phi))))
-    with (Some (DistillationComplete.wpA n j 0 (DistillationComplete.post_q k n)
-                .+ (DistillationComplete.wpA n j 1 (DistillationComplete.post_q k n)
-                    .+ @Zero (2 ^ (4 * S n)) (2 ^ (4 * S n))))).
-  rewrite Mplus_0_r, (DistillationComplete.wpA_sum_idle n k j Hkj Hjn).
-  reflexivity.
-Qed.
-
-Lemma qsum_b_idle : forall n k j phi,
-    (k < j)%nat -> (j <= n)%nat -> forall s,
-    qpred_denote (Sig n) s (qsum (map fst (fam_b n k j phi)))
-    = Some (post_q k n).
-Proof.
-  intros n k j phi Hkj Hjn s.
-  change (qpred_denote (Sig n) s (qsum (map fst (fam_b n k j phi))))
-    with (Some (DistillationComplete.wpB n j 0 (DistillationComplete.post_q k n)
-                .+ (DistillationComplete.wpB n j 1 (DistillationComplete.post_q k n)
-                    .+ @Zero (2 ^ (4 * S n)) (2 ^ (4 * S n))))).
-  rewrite Mplus_0_r, (DistillationComplete.wpB_sum_idle n k j Hkj Hjn).
-  reflexivity.
-Qed.
-
 (** *** The two conseq steps ****************************************** *)
 
 Lemma entails_q_eq : forall d (S0 : interp d) (phi psi : formula) (A B : qpred d),
@@ -1687,34 +1623,42 @@ Proof.
     rewrite (Hq s Hs) in HM. rewrite HM in HN. inversion HN. apply lowner_refl.
 Qed.
 
-Lemma wf_at_q : forall n k phi, (k <= n)%nat ->
-    wf_assertion (Sig n) (at_q phi k n).
-Proof.
-  intros n k phi Hk s M HM. cbn in HM. inversion HM; subst.
-  apply is_effect_post_q; exact Hk.
-Qed.
+(** [DistillationComplete] repeats the predicates verbatim so that its
+    obligations close by conversion here.  Nothing enforces that but these
+    checks: if the two copies ever drift apart, [reflexivity] stops working
+    and the derivation breaks with it. *)
+Lemma post_q_C : forall k n, post_q k n = DistillationComplete.post_q k n.
+Proof. reflexivity. Qed.
 
-(** *** One branch, and the merge ************************************* *)
+Lemma inv_q_C : forall j k n, inv_q j k n = DistillationComplete.inv_q j k n.
+Proof. reflexivity. Qed.
 
-Lemma probe_a_branch : forall n k j v phi,
+(** *** One branch *****************************************************
+
+    The four steps of a probe, read backwards: Meas with a fresh [ya],
+    Unitary, Aux-Subst pinning [ya := v], and then a Conseq that replaces
+    the wp-chain qpred by the single matrix it denotes. *)
+
+Lemma probe_a_branch : forall n j v phi M,
     ~ In ma (formula_vars phi) -> ~ In ya (formula_vars phi) ->
-    Sig n ⊢ₗ {{ mk_assertion phi (quantum_part (Apre n k j v phi)) }}
+    Sig n ⊢ₗ {{ mk_assertion phi (quantum_part (Apre n j v phi M)) }}
              probe_a j
-             {{ mk_assertion (psi_a phi v) (qpost k n) }}.
+             {{ mk_assertion (psi_a phi v) (qconst n M) }}.
 Proof.
-  intros n k j v phi Hma Hya.
+  intros n j v phi M Hma Hya.
   assert (Hs1 : formula_subst phi ma (e_var ya) = phi)
     by (apply formula_subst_notin; exact Hma).
   assert (Hs2 : forall (w : val), formula_subst phi ya (e_val w) = phi)
     by (intro w; apply formula_subst_notin; exact Hya).
-  replace (mk_assertion phi (quantum_part (Apre n k j v phi)))
-     with (Apre n k j v phi).
-  2:{ unfold Apre, at_q, assertion_subst, wp_unitary, wp_meas, mk_assertion;
+  replace (mk_assertion phi (quantum_part (Apre n j v phi M)))
+     with (Apre n j v phi M).
+  2:{ unfold Apre, assertion_subst, wp_unitary, wp_meas, mk_assertion;
       cbn [classical_part quantum_part].
       rewrite Hs1, Hs2. reflexivity. }
-  replace (mk_assertion (psi_a phi v) (qpost k n))
-     with (assertion_subst (and_eq (at_q phi k n) ma ya) ya (e_val v)).
-  2:{ unfold and_eq, at_q, assertion_subst, mk_assertion, psi_a, qpost;
+  replace (mk_assertion (psi_a phi v) (qconst n M))
+     with (assertion_subst (and_eq (mk_assertion phi (qconst n M)) ma ya)
+                           ya (e_val v)).
+  2:{ unfold and_eq, assertion_subst, mk_assertion, psi_a, qconst;
       unfold ya, ma;
       cbn [classical_part quantum_part formula_subst expr_subst qpred_subst
            map Nat.eqb].
@@ -1725,30 +1669,31 @@ Proof.
   - cbn [lblock_read app In]. intuition.
   - eapply rule_seq; [ apply rule_unitary | apply rule_meas ].
     + unfold ya, ma. lia.
-    + unfold at_q, assertion_vars, mk_assertion, qpost;
+    + unfold assertion_vars, mk_assertion, qconst;
         cbn [classical_part quantum_part qpred_vars flat_map].
       rewrite app_nil_r. exact Hya.
 Qed.
 
-Lemma probe_b_branch : forall n k j v phi,
+Lemma probe_b_branch : forall n j v phi M,
     ~ In mb (formula_vars phi) -> ~ In yb (formula_vars phi) ->
-    Sig n ⊢ₗ {{ mk_assertion phi (quantum_part (Bpre n k j v phi)) }}
+    Sig n ⊢ₗ {{ mk_assertion phi (quantum_part (Bpre n j v phi M)) }}
              probe_b j
-             {{ mk_assertion (psi_b phi v) (qpost k n) }}.
+             {{ mk_assertion (psi_b phi v) (qconst n M) }}.
 Proof.
-  intros n k j v phi Hmb Hyb.
+  intros n j v phi M Hmb Hyb.
   assert (Hs1 : formula_subst phi mb (e_var yb) = phi)
     by (apply formula_subst_notin; exact Hmb).
   assert (Hs2 : forall (w : val), formula_subst phi yb (e_val w) = phi)
     by (intro w; apply formula_subst_notin; exact Hyb).
-  replace (mk_assertion phi (quantum_part (Bpre n k j v phi)))
-     with (Bpre n k j v phi).
-  2:{ unfold Bpre, at_q, assertion_subst, wp_unitary, wp_meas, mk_assertion;
+  replace (mk_assertion phi (quantum_part (Bpre n j v phi M)))
+     with (Bpre n j v phi M).
+  2:{ unfold Bpre, assertion_subst, wp_unitary, wp_meas, mk_assertion;
       cbn [classical_part quantum_part].
       rewrite Hs1, Hs2. reflexivity. }
-  replace (mk_assertion (psi_b phi v) (qpost k n))
-     with (assertion_subst (and_eq (at_q phi k n) mb yb) yb (e_val v)).
-  2:{ unfold and_eq, at_q, assertion_subst, mk_assertion, psi_b, qpost;
+  replace (mk_assertion (psi_b phi v) (qconst n M))
+     with (assertion_subst (and_eq (mk_assertion phi (qconst n M)) mb yb)
+                           yb (e_val v)).
+  2:{ unfold and_eq, assertion_subst, mk_assertion, psi_b, qconst;
       unfold yb, mb;
       cbn [classical_part quantum_part formula_subst expr_subst qpred_subst
            map Nat.eqb].
@@ -1759,13 +1704,87 @@ Proof.
   - cbn [lblock_read app In]. intuition.
   - eapply rule_seq; [ apply rule_unitary | apply rule_meas ].
     + unfold yb, mb. lia.
-    + unfold at_q, assertion_vars, mk_assertion, qpost;
+    + unfold assertion_vars, mk_assertion, qconst;
         cbn [classical_part quantum_part qpred_vars flat_map].
       rewrite app_nil_r. exact Hyb.
 Qed.
 
-(** The probe of a round the assertion leaves free, for any classical part
-    the probe cannot touch. *)
+(** The wp-chain qpred denotes exactly the round's backward transformer —
+    provided the outcome is one the measurement can produce.  Off the
+    outcome set the interpretation hands out [Zero] while [Pi] does not, so
+    the two cases are checked separately. *)
+Lemma denote_Apre : forall n j v phi M s, (v = 0 \/ v = 1)%nat ->
+    qpred_denote (Sig n) s (quantum_part (Apre n j v phi M))
+    = Some (DistillationComplete.wpA n j v M).
+Proof. intros n j v phi M s [-> | ->]; reflexivity. Qed.
+
+Lemma denote_Bpre : forall n j v phi M s, (v = 0 \/ v = 1)%nat ->
+    qpred_denote (Sig n) s (quantum_part (Bpre n j v phi M))
+    = Some (DistillationComplete.wpB n j v M).
+Proof. intros n j v phi M s [-> | ->]; reflexivity. Qed.
+
+Lemma probe_a_wp : forall n j v phi M,
+    ~ In ma (formula_vars phi) -> ~ In ya (formula_vars phi) ->
+    (v = 0 \/ v = 1)%nat -> is_effect (dim := 4 * S n) M ->
+    Sig n ⊢ₗ {{ mk_assertion phi (qconst n (DistillationComplete.wpA n j v M)) }}
+             probe_a j
+             {{ mk_assertion (psi_a phi v) (qconst n M) }}.
+Proof.
+  intros n j v phi M Hma Hya Hv HM.
+  eapply rule_conseq with (R := mk_assertion (psi_a phi v) (qconst n M)).
+  - apply entails_q_eq; [ intros s H; exact H |].
+    intros s _. rewrite (denote_Apre n j v phi M s Hv). reflexivity.
+  - apply probe_a_branch; assumption.
+  - apply entails_refl.
+  - apply wf_qconst; exact HM.
+Qed.
+
+Lemma probe_b_wp : forall n j v phi M,
+    ~ In mb (formula_vars phi) -> ~ In yb (formula_vars phi) ->
+    (v = 0 \/ v = 1)%nat -> is_effect (dim := 4 * S n) M ->
+    Sig n ⊢ₗ {{ mk_assertion phi (qconst n (DistillationComplete.wpB n j v M)) }}
+             probe_b j
+             {{ mk_assertion (psi_b phi v) (qconst n M) }}.
+Proof.
+  intros n j v phi M Hmb Hyb Hv HM.
+  eapply rule_conseq with (R := mk_assertion (psi_b phi v) (qconst n M)).
+  - apply entails_q_eq; [ intros s H; exact H |].
+    intros s _. rewrite (denote_Bpre n j v phi M s Hv). reflexivity.
+  - apply probe_b_branch; assumption.
+  - apply entails_refl.
+  - apply wf_qconst; exact HM.
+Qed.
+
+(** *** The merge, for a round the assertion leaves free ***************
+
+    The two parties are then independent — each side's two outcomes sum to
+    the identity on its own qubit — so the merge splits in half and the
+    assertion between the halves is the postcondition again. *)
+
+Definition fam_a (n j : nat) (phi : formula) (M : Square (2 ^ (4 * S n)))
+  : list (qpred (4 * S n) * formula) :=
+  (qconst n (DistillationComplete.wpA n j 0 M), psi_a phi 0%nat)
+  :: (qconst n (DistillationComplete.wpA n j 1 M), psi_a phi 1%nat) :: nil.
+
+Definition fam_b (n j : nat) (phi : formula) (M : Square (2 ^ (4 * S n)))
+  : list (qpred (4 * S n) * formula) :=
+  (qconst n (DistillationComplete.wpB n j 0 M), psi_b phi 0%nat)
+  :: (qconst n (DistillationComplete.wpB n j 1 M), psi_b phi 1%nat) :: nil.
+
+Lemma qsum_a_denote : forall n j phi M s,
+    qpred_denote (Sig n) s (qsum (map fst (fam_a n j phi M)))
+    = Some (DistillationComplete.wpA n j 0 M
+            .+ (DistillationComplete.wpA n j 1 M
+                .+ @Zero (2 ^ (4 * S n)) (2 ^ (4 * S n)))).
+Proof. reflexivity. Qed.
+
+Lemma qsum_b_denote : forall n j phi M s,
+    qpred_denote (Sig n) s (qsum (map fst (fam_b n j phi M)))
+    = Some (DistillationComplete.wpB n j 0 M
+            .+ (DistillationComplete.wpB n j 1 M
+                .+ @Zero (2 ^ (4 * S n)) (2 ^ (4 * S n)))).
+Proof. reflexivity. Qed.
+
 Lemma probe_a_step : forall n k j phi,
     (k <= n)%nat -> (k < j)%nat -> (j <= n)%nat ->
     ~ In ma (formula_vars phi) -> ~ In ya (formula_vars phi) ->
@@ -1773,21 +1792,23 @@ Lemma probe_a_step : forall n k j phi,
 Proof.
   intros n k j phi Hkn Hkj Hjn Hma Hya.
   eapply rule_conseq with
-    (Q := mk_assertion phi (qsum (map fst (fam_a n k j phi))))
-    (R := mk_assertion (fdisj (map snd (fam_a n k j phi))) (qpost k n)).
-  - apply entails_q_eq.
-    + intros s H; exact H.
-    + intros s _. rewrite (qsum_a_idle n k j phi Hkj Hjn s). reflexivity.
+    (Q := mk_assertion phi (qsum (map fst (fam_a n j phi (post_q k n)))))
+    (R := mk_assertion (fdisj (map snd (fam_a n j phi (post_q k n))))
+                       (qconst n (post_q k n))).
+  - apply entails_q_eq; [ intros s H; exact H |].
+    intros s _. rewrite post_q_C, qsum_a_denote, Mplus_0_r,
+                        (DistillationComplete.wpA_sum_idle n k j Hkj Hjn).
+    reflexivity.
   - apply rule_branch_accum_l.
-    + repeat constructor; apply probe_a_branch; assumption.
+    + repeat constructor; apply probe_a_wp; auto using is_effect_post_q.
     + repeat constructor. intros s H0 H1.
       apply psi_a_ma in H0. apply psi_a_ma in H1. lia.
-    + intros s. exists (post_q k n). apply qsum_a_idle; assumption.
-  - apply entails_q_eq.
-    + intros s H.
-      apply (fdisj_elim _ (Sig n) s (map snd (fam_a n k j phi)) phi); [| exact H].
-      repeat constructor; intro H'; eapply psi_a_drop; exact H'.
-    + intros s _. reflexivity.
+    + intros s. rewrite qsum_a_denote. eexists; reflexivity.
+  - apply entails_q_eq; [| intros s _; reflexivity ].
+    intros s H.
+    apply (fdisj_elim _ (Sig n) s (map snd (fam_a n j phi (post_q k n))) phi);
+      [| exact H].
+    repeat constructor; intro H'; eapply psi_a_drop; exact H'.
   - apply wf_at_q; exact Hkn.
 Qed.
 
@@ -1798,21 +1819,23 @@ Lemma probe_b_step : forall n k j phi,
 Proof.
   intros n k j phi Hkn Hkj Hjn Hmb Hyb.
   eapply rule_conseq with
-    (Q := mk_assertion phi (qsum (map fst (fam_b n k j phi))))
-    (R := mk_assertion (fdisj (map snd (fam_b n k j phi))) (qpost k n)).
-  - apply entails_q_eq.
-    + intros s H; exact H.
-    + intros s _. rewrite (qsum_b_idle n k j phi Hkj Hjn s). reflexivity.
+    (Q := mk_assertion phi (qsum (map fst (fam_b n j phi (post_q k n)))))
+    (R := mk_assertion (fdisj (map snd (fam_b n j phi (post_q k n))))
+                       (qconst n (post_q k n))).
+  - apply entails_q_eq; [ intros s H; exact H |].
+    intros s _. rewrite post_q_C, qsum_b_denote, Mplus_0_r,
+                        (DistillationComplete.wpB_sum_idle n k j Hkj Hjn).
+    reflexivity.
   - apply rule_branch_accum_l.
-    + repeat constructor; apply probe_b_branch; assumption.
+    + repeat constructor; apply probe_b_wp; auto using is_effect_post_q.
     + repeat constructor. intros s H0 H1.
       apply psi_b_mb in H0. apply psi_b_mb in H1. lia.
-    + intros s. exists (post_q k n). apply qsum_b_idle; assumption.
-  - apply entails_q_eq.
-    + intros s H.
-      apply (fdisj_elim _ (Sig n) s (map snd (fam_b n k j phi)) phi); [| exact H].
-      repeat constructor; intro H'; eapply psi_b_drop; exact H'.
-    + intros s _. reflexivity.
+    + intros s. rewrite qsum_b_denote. eexists; reflexivity.
+  - apply entails_q_eq; [| intros s _; reflexivity ].
+    intros s H.
+    apply (fdisj_elim _ (Sig n) s (map snd (fam_b n j phi (post_q k n))) phi);
+      [| exact H].
+    repeat constructor; intro H'; eapply psi_b_drop; exact H'.
   - apply wf_at_q; exact Hkn.
 Qed.
 
@@ -1919,7 +1942,7 @@ Ltac accA_fresh :=
   unfold ma, mb, ya, yb, ia, da, oa, ib, db, ob, x, y;
   cbn [In]; intuition lia.
 
-(** The counterpart of [guard_a_contra]: an assertion that pins [da = 0]
+(** The counterpart of [acc_guard_a_true]: an assertion that pins [da = 0]
     and [ma = x] makes the ELSE branch unreachable. *)
 Lemma guard_a_live : forall n (Q R : assertion (4 * S n)),
     (forall s, formula_holds (Sig n) s (classical_part Q) = true ->
@@ -2076,10 +2099,847 @@ Proof.
     + apply phase_after; lia.
 Qed.
 
+(** ** Effects under conjugation ***************************************
+
+    The rejecting round is the one place where the merge has to span BOTH
+    parties — its two surviving outcome pairs are correlated — so Bob's
+    accept test sits inside a branch, and the Conseq step it carries asks
+    whether the weakest precondition of an effect is still an effect.
+
+    It is.  [X ↦ K† X K] preserves [0 ⊑ · ⊑ I] whenever [K† K ⊑ I], and
+    both of a round's operators are contractions: a CNOT is unitary, a
+    measurement operator is a projector.  The two finished phases never
+    needed this, because there the merge splits into two independent
+    halves and the accept tests stay outside it. *)
+
+Lemma psd_conj : forall m (K A : Square m),
+    WF_Matrix K -> positive_semidefinite A ->
+    positive_semidefinite (K † × A × K).
+Proof.
+  intros m K A HK HA z Hz.
+  assert (E : z † × (K † × A × K) × z = (K × z) † × A × (K × z))
+    by (rewrite Mmult_adjoint, !Mmult_assoc; reflexivity).
+  rewrite E. apply HA. auto with wf_db.
+Qed.
+
+Lemma psd_plus : forall m (A B : Square m),
+    positive_semidefinite A -> positive_semidefinite B ->
+    positive_semidefinite (A .+ B).
+Proof.
+  intros m A B HA HB z Hz.
+  assert (E : z † × (A .+ B) × z = (z † × A × z) .+ (z † × B × z))
+    by (rewrite Mmult_plus_distr_l, Mmult_plus_distr_r; reflexivity).
+  rewrite E. unfold Mplus. cbv beta.
+  replace (fst ((z † × A × z) O O + (z † × B × z) O O)%C)
+     with (fst ((z † × A × z) O O) + fst ((z † × B × z) O O))%R by reflexivity.
+  specialize (HA z Hz); specialize (HB z Hz). lra.
+Qed.
+
+Lemma lowner_trans : forall m (A B C : Square m), A ⊑ B -> B ⊑ C -> A ⊑ C.
+Proof.
+  intros m A B C HAB HBC. unfold lowner in *.
+  assert (E : C .+ (- C1) .* A = (C .+ (- C1) .* B) .+ (B .+ (- C1) .* A)) by lma.
+  rewrite E. apply psd_plus; assumption.
+Qed.
+
+Lemma lowner_conj : forall m (K A B : Square m),
+    WF_Matrix K -> A ⊑ B -> (K † × A × K) ⊑ (K † × B × K).
+Proof.
+  intros m K A B HK H. unfold lowner in *.
+  assert (E : K † × B × K .+ (- C1) .* (K † × A × K)
+              = K † × (B .+ (- C1) .* A) × K).
+  { rewrite Mmult_plus_distr_l, Mmult_plus_distr_r,
+            Mscale_mult_dist_r, Mscale_mult_dist_l. reflexivity. }
+  rewrite E. apply psd_conj; assumption.
+Qed.
+
+Lemma effect_conj : forall d (K X : Square (2 ^ d)),
+    WF_Matrix K -> (K † × K) ⊑ I (2 ^ d) ->
+    is_effect (dim := d) X -> is_effect (dim := d) (K † × X × K).
+Proof.
+  intros d K X HK HKK [HX1 HX2]. split.
+  - apply psd_conj; assumption.
+  - apply (lowner_trans _ _ (K † × I (2 ^ d) × K)).
+    + apply lowner_conj; assumption.
+    + rewrite Mmult_1_r by auto with wf_db. exact HKK.
+Qed.
+
+(** A padded projector is a projector: [pad] commutes with both adjoint and
+    product, so the block algebra transfers unchanged. *)
+Lemma pad_adjoint : forall n start dim (A : Square (2 ^ n)),
+    (@pad n start dim A) † = @pad n start dim (A †).
+Proof.
+  intros n start dim A. unfold pad.
+  bdestruct (start + n <=? dim); [| apply zero_adjoint_eq].
+  (* [2 ^ dim] has to be split into the three factors by hand: the index is
+     phantom, so unification cannot do it. *)
+  replace (2 ^ dim)%nat with (2 ^ start * 2 ^ n * 2 ^ (dim - (start + n)))%nat
+    by (rewrite <- !Nat.pow_add_r; f_equal; lia).
+  rewrite !kron_adjoint, !id_adjoint_eq. reflexivity.
+Qed.
+
+Lemma projlike_pad : forall n start dim (A : Square (2 ^ n)),
+    projlike A -> projlike (@pad n start dim A).
+Proof.
+  intros n start dim A [HW [HH HI]]. repeat split.
+  - apply WF_pad; exact HW.
+  - rewrite pad_adjoint, HH; reflexivity.
+  - rewrite pad_mult, HI; reflexivity.
+Qed.
+
+Lemma projlike_contraction : forall d (M : Square (2 ^ d)),
+    projlike M -> (M † × M) ⊑ I (2 ^ d).
+Proof.
+  intros d M HM. destruct HM as [HW [HH HI]].
+  rewrite HH, HI. exact (proj2 (herm_idem_effect d M HW HH HI)).
+Qed.
+
+Lemma projlike_Pi : forall v, projlike (DistillationComplete.Pi v).
+Proof.
+  intro v. unfold DistillationComplete.Pi.
+  destruct (Nat.eqb v 0%nat); repeat split;
+    solve [ auto with wf_db | lma' ].
+Qed.
+
+Lemma WF_mA : forall n j v, WF_Matrix (DistillationComplete.mA n j v).
+Proof.
+  intros n j v. unfold DistillationComplete.mA.
+  apply (WF_pad_u (4 * S n)). apply projlike_Pi.
+Qed.
+
+Lemma WF_mB : forall n j v, WF_Matrix (DistillationComplete.mB n j v).
+Proof.
+  intros n j v. unfold DistillationComplete.mB.
+  apply (WF_pad_u (4 * S n)). apply projlike_Pi.
+Qed.
+
+Lemma WF_cA : forall n j, WF_Matrix (DistillationComplete.cA n j).
+Proof.
+  intros n j. unfold DistillationComplete.cA.
+  apply (WF_pad_ctrl (4 * S n)); auto with wf_db.
+Qed.
+
+Lemma WF_cB : forall n j, WF_Matrix (DistillationComplete.cB n j).
+Proof.
+  intros n j. unfold DistillationComplete.cB.
+  apply (WF_pad_ctrl (4 * S n)); auto with wf_db.
+Qed.
+
+Lemma contraction_cA : forall n j, (j <= n)%nat ->
+    ((DistillationComplete.cA n j) † × (DistillationComplete.cA n j))
+    ⊑ I (2 ^ (4 * S n)).
+Proof.
+  intros n j Hj.
+  assert (HU : WF_Unitary (DistillationComplete.cA n j)).
+  { unfold DistillationComplete.cA. apply pad_ctrl_unitary;
+      unfold DistillationComplete.Ak, DistillationComplete.At;
+      try lia; apply σx_unitary. }
+  destruct HU as [_ HU]. rewrite HU. apply lowner_refl.
+Qed.
+
+Lemma contraction_cB : forall n j, (j <= n)%nat ->
+    ((DistillationComplete.cB n j) † × (DistillationComplete.cB n j))
+    ⊑ I (2 ^ (4 * S n)).
+Proof.
+  intros n j Hj.
+  assert (HU : WF_Unitary (DistillationComplete.cB n j)).
+  { unfold DistillationComplete.cB. apply pad_ctrl_unitary;
+      unfold DistillationComplete.Bk, DistillationComplete.Bt;
+      try lia; apply σx_unitary. }
+  destruct HU as [_ HU]. rewrite HU. apply lowner_refl.
+Qed.
+
+Lemma effect_wpA : forall n j v (M : Square (2 ^ (4 * S n))),
+    (j <= n)%nat -> is_effect (dim := 4 * S n) M ->
+    is_effect (dim := 4 * S n) (DistillationComplete.wpA n j v M).
+Proof.
+  intros n j v M Hj HM. unfold DistillationComplete.wpA.
+  apply effect_conj; [ apply WF_cA | apply contraction_cA; exact Hj |].
+  apply effect_conj;
+    [ apply WF_mA
+    | apply (projlike_contraction (4 * S n)); unfold DistillationComplete.mA, pad_u;
+      apply projlike_pad, projlike_Pi
+    | exact HM ].
+Qed.
+
+Lemma effect_wpB : forall n j v (M : Square (2 ^ (4 * S n))),
+    (j <= n)%nat -> is_effect (dim := 4 * S n) M ->
+    is_effect (dim := 4 * S n) (DistillationComplete.wpB n j v M).
+Proof.
+  intros n j v M Hj HM. unfold DistillationComplete.wpB.
+  apply effect_conj; [ apply WF_cB | apply contraction_cB; exact Hj |].
+  apply effect_conj;
+    [ apply WF_mB
+    | apply (projlike_contraction (4 * S n)); unfold DistillationComplete.mB, pad_u;
+      apply projlike_pad, projlike_Pi
+    | exact HM ].
+Qed.
+
+(** ** The rejecting round ********************************************
+
+    [tround i _] with [i < k] opens with round [i]'s accept test, and under
+    [inv_at (S i) k n] BOTH guards are dead — [Disagree] says the two
+    outcomes of the previous round did not match.  Then round [S i] is
+    probed, and this time the two parties' outcomes ARE correlated: only
+    the two disagreeing pairs survive if the round rejects, only the two
+    agreeing pairs if it is the accepting round.  So the merge cannot be
+    split in half; the family ranges over PAIRS, the block it spans is the
+    whole local row, and Bob's accept test sits inside it.  That is what
+    the effect-under-conjugation machinery above is for. *)
+
+Definition DisA : formula := f_not (f_eq (e_var ma) (e_var x)).
+Definition DisB : formula := f_not (f_eq (e_var mb) (e_var y)).
+
+Lemma Disagree_split : Disagree = f_and DisA DisB.
+Proof. reflexivity. Qed.
+
+(** The outcome pair a branch records. *)
+Definition pair_f (a b : nat) : formula := psi_b (psi_a Zeros a) b.
+
+(** *** Classical plumbing ******************************************** *)
+
+Lemma and_split : forall n s p q,
+    formula_holds (Sig n) s (f_and p q) = true ->
+    formula_holds (Sig n) s p = true /\ formula_holds (Sig n) s q = true.
+Proof.
+  intros n s p q H.
+  change (formula_holds (Sig n) s (f_and p q))
+    with (andb (formula_holds (Sig n) s p) (formula_holds (Sig n) s q)) in H.
+  apply andb_true_iff; exact H.
+Qed.
+
+Lemma and_join : forall n s p q,
+    formula_holds (Sig n) s p = true -> formula_holds (Sig n) s q = true ->
+    formula_holds (Sig n) s (f_and p q) = true.
+Proof.
+  intros n s p q H1 H2.
+  change (formula_holds (Sig n) s (f_and p q))
+    with (andb (formula_holds (Sig n) s p) (formula_holds (Sig n) s q)).
+  rewrite H1, H2; reflexivity.
+Qed.
+
+Lemma disA_neq : forall n s,
+    formula_holds (Sig n) s DisA = true -> s ma <> s x.
+Proof.
+  intros n s H. unfold DisA in H.
+  change (formula_holds (Sig n) s (f_not (f_eq (e_var ma) (e_var x))))
+    with (negb (Nat.eqb (s ma) (s x))) in H.
+  apply negb_true_iff, Nat.eqb_neq in H. exact H.
+Qed.
+
+Lemma disB_neq : forall n s,
+    formula_holds (Sig n) s DisB = true -> s mb <> s y.
+Proof.
+  intros n s H. unfold DisB in H.
+  change (formula_holds (Sig n) s (f_not (f_eq (e_var mb) (e_var y))))
+    with (negb (Nat.eqb (s mb) (s y))) in H.
+  apply negb_true_iff, Nat.eqb_neq in H. exact H.
+Qed.
+
+Lemma pair_f_ma : forall n a b s,
+    formula_holds (Sig n) s (pair_f a b) = true -> s ma = a.
+Proof.
+  intros n a b s H. unfold pair_f in H.
+  apply psi_b_drop in H. apply psi_a_ma in H. exact H.
+Qed.
+
+Lemma pair_f_mb : forall n a b s,
+    formula_holds (Sig n) s (pair_f a b) = true -> s mb = b.
+Proof. intros n a b s H. apply psi_b_mb in H. exact H. Qed.
+
+Lemma pair_f_zeros : forall n a b s,
+    formula_holds (Sig n) s (pair_f a b) = true ->
+    formula_holds (Sig n) s Zeros = true.
+Proof.
+  intros n a b s H. unfold pair_f in H.
+  apply psi_b_drop in H. apply psi_a_drop in H. exact H.
+Qed.
+
+(** *** The two dead guards ******************************************* *)
+
+Lemma guard_a_dead : forall n (Q R : assertion (4 * S n)),
+    (forall s, formula_holds (Sig n) s (classical_part Q) = true -> s ma <> s x) ->
+    and_guard Q guard_a true ⊨[Sig n] R.
+Proof.
+  intros n Q R HQ.
+  assert (Hf : forall s, formula_holds (Sig n) s
+                 (classical_part (and_guard Q guard_a true)) = false).
+  { intro s. cbn [and_guard classical_part].
+    destruct (formula_holds (Sig n) s (classical_part Q)) eqn:E.
+    - pose proof (HQ s E) as Hne.
+      cbn [and_guard classical_part formula_holds]. rewrite E. cbn [andb].
+      cbn. apply Nat.eqb_neq in Hne. rewrite Hne. reflexivity.
+    - cbn [and_guard classical_part formula_holds]. rewrite E. reflexivity. }
+  split; [| split];
+    [ intros s Hs | intros s Hs | intros s M N Hs ];
+    rewrite Hf in Hs; discriminate.
+Qed.
+
+Lemma guard_b_dead : forall n (Q R : assertion (4 * S n)),
+    (forall s, formula_holds (Sig n) s (classical_part Q) = true -> s mb <> s y) ->
+    and_guard Q guard_b true ⊨[Sig n] R.
+Proof.
+  intros n Q R HQ.
+  assert (Hf : forall s, formula_holds (Sig n) s
+                 (classical_part (and_guard Q guard_b true)) = false).
+  { intro s. cbn [and_guard classical_part].
+    destruct (formula_holds (Sig n) s (classical_part Q)) eqn:E.
+    - pose proof (HQ s E) as Hne.
+      cbn [and_guard classical_part formula_holds]. rewrite E. cbn [andb].
+      cbn. apply Nat.eqb_neq in Hne. rewrite Hne. reflexivity.
+    - cbn [and_guard classical_part formula_holds]. rewrite E. reflexivity. }
+  split; [| split];
+    [ intros s Hs | intros s Hs | intros s M N Hs ];
+    rewrite Hf in Hs; discriminate.
+Qed.
+
+(** An accept test whose guard is dead is a [skip] that may also WEAKEN the
+    classical part — which is how [DisA] and [DisB] get consumed, each just
+    before the probe that overwrites the outcome it speaks about. *)
+Lemma accept_a_dead : forall n i (phi psi : formula) (A : qpred (4 * S n)),
+    (forall s, formula_holds (Sig n) s phi = true -> s ma <> s x) ->
+    (forall s, formula_holds (Sig n) s phi = true ->
+               formula_holds (Sig n) s psi = true) ->
+    wf_assertion (Sig n) (mk_assertion psi A) ->
+    Sig n ⊢ₗ {{ mk_assertion phi A }} accept_a i {{ mk_assertion psi A }}.
+Proof.
+  intros n i phi psi A Hne Himp Hwf. apply rule_if.
+  - eapply rule_conseq with (R := mk_assertion psi A);
+      [ | eapply rule_seq; [apply rule_assign |];
+          eapply rule_seq; [apply rule_assign | apply rule_assign]
+      | apply entails_refl | exact Hwf ].
+    apply guard_a_dead. exact Hne.
+  - eapply rule_conseq with (R := mk_assertion psi A);
+      [ | apply rule_skip | apply entails_refl | exact Hwf ].
+    apply entails_q_eq; [| intros s _; reflexivity ].
+    intros s Hs. apply and_split in Hs as [Hs _]. apply Himp; exact Hs.
+Qed.
+
+Lemma accept_b_dead : forall n i (phi psi : formula) (A : qpred (4 * S n)),
+    (forall s, formula_holds (Sig n) s phi = true -> s mb <> s y) ->
+    (forall s, formula_holds (Sig n) s phi = true ->
+               formula_holds (Sig n) s psi = true) ->
+    wf_assertion (Sig n) (mk_assertion psi A) ->
+    Sig n ⊢ₗ {{ mk_assertion phi A }} accept_b i {{ mk_assertion psi A }}.
+Proof.
+  intros n i phi psi A Hne Himp Hwf. apply rule_if.
+  - eapply rule_conseq with (R := mk_assertion psi A);
+      [ | eapply rule_seq; [apply rule_assign |];
+          eapply rule_seq; [apply rule_assign | apply rule_assign]
+      | apply entails_refl | exact Hwf ].
+    apply guard_b_dead. exact Hne.
+  - eapply rule_conseq with (R := mk_assertion psi A);
+      [ | apply rule_skip | apply entails_refl | exact Hwf ].
+    apply entails_q_eq; [| intros s _; reflexivity ].
+    intros s Hs. apply and_split in Hs as [Hs _]. apply Himp; exact Hs.
+Qed.
+
+(** *** [inv_q] is an effect ****************************************** *)
+
+Lemma Ev_Od_orth : Ev × Od = @Zero 4 4.
+Proof. unfold Ev, Od. lma'. Qed.
+
+Lemma Od_Ev_orth : Od × Ev = @Zero 4 4.
+Proof. unfold Ev, Od. lma'. Qed.
+
+Lemma projlike_plus_orth : forall m (P Q : Square m),
+    projlike P -> projlike Q -> P × Q = Zero -> Q × P = Zero ->
+    projlike (P .+ Q).
+Proof.
+  intros m P Q [WP [HP IP]] [WQ [HQ IQ]] HPQ HQP. repeat split.
+  - auto with wf_db.
+  - rewrite Mplus_adjoint, HP, HQ. reflexivity.
+  - rewrite Mmult_plus_distr_l, !Mmult_plus_distr_r, IP, IQ, HPQ, HQP,
+            Mplus_0_r, Mplus_0_l. reflexivity.
+Qed.
+
+Lemma projlike_Pass : projlike Pass.
+Proof.
+  unfold Pass. apply (projlike_plus_orth 16).
+  - change (@projlike (4 * 4) (Ev ⊗ Ev)). apply projlike_kron; apply projlike_Ev.
+  - change (@projlike (4 * 4) (Od ⊗ Od)). apply projlike_kron; apply projlike_Od.
+  - change (@Mmult 16 16 16 (Ev ⊗ Ev) (Od ⊗ Od))
+      with (@Mmult (4 * 4) (4 * 4) (4 * 4) (Ev ⊗ Ev) (Od ⊗ Od)).
+    rewrite kron_mixed_product, Ev_Od_orth. apply kron_0_l.
+  - change (@Mmult 16 16 16 (Od ⊗ Od) (Ev ⊗ Ev))
+      with (@Mmult (4 * 4) (4 * 4) (4 * 4) (Od ⊗ Od) (Ev ⊗ Ev)).
+    rewrite kron_mixed_product, Od_Ev_orth. apply kron_0_l.
+Qed.
+
+Lemma projlike_Rej : projlike Rej.
+Proof.
+  unfold Rej. apply (projlike_plus_orth 16).
+  - change (@projlike (4 * 4) (Ev ⊗ Od)).
+    apply projlike_kron; [apply projlike_Ev | apply projlike_Od].
+  - change (@projlike (4 * 4) (Od ⊗ Ev)).
+    apply projlike_kron; [apply projlike_Od | apply projlike_Ev].
+  - change (@Mmult 16 16 16 (Ev ⊗ Od) (Od ⊗ Ev))
+      with (@Mmult (4 * 4) (4 * 4) (4 * 4) (Ev ⊗ Od) (Od ⊗ Ev)).
+    rewrite kron_mixed_product, Ev_Od_orth, Od_Ev_orth. apply kron_0_l.
+  - change (@Mmult 16 16 16 (Od ⊗ Ev) (Ev ⊗ Od))
+      with (@Mmult (4 * 4) (4 * 4) (4 * 4) (Od ⊗ Ev) (Ev ⊗ Od)).
+    rewrite kron_mixed_product, Od_Ev_orth, Ev_Od_orth. apply kron_0_l.
+Qed.
+
+Lemma dim_inv : forall j k n, (j <= k)%nat -> (k <= n)%nat ->
+    (16 ^ j * 16 ^ (k - j) * 16 * 16 ^ (n - k))%nat = (2 ^ (4 * S n))%nat.
+Proof.
+  intros j k n Hjk Hkn.
+  replace (16 ^ j * 16 ^ (k - j) * 16 * 16 ^ (n - k))%nat
+     with (16 ^ (j + (k - j) + 1 + (n - k)))%nat
+     by (rewrite !Nat.pow_add_r; cbn [Nat.pow]; ring).
+  replace (j + (k - j) + 1 + (n - k))%nat with (S n) by lia.
+  rewrite Nat.pow_mul_r. reflexivity.
+Qed.
+
+Lemma projlike_inv_q : forall j k n,
+    @projlike (16 ^ j * 16 ^ (k - j) * 16 * 16 ^ (n - k)) (inv_q j k n).
+Proof.
+  intros j k n. unfold inv_q.
+  apply projlike_kron; [apply projlike_kron; [apply projlike_kron |] |].
+  - apply projlike_kron_n, projlike_NeqSub.
+  - apply projlike_kron_n, projlike_Rej.
+  - apply projlike_Pass.
+  - apply projlike_kron_n, projlike_I.
+Qed.
+
+Lemma is_effect_inv_q : forall j k n, (j <= k)%nat -> (k <= n)%nat ->
+    is_effect (dim := 4 * S n) (inv_q j k n).
+Proof.
+  intros j k n Hjk Hkn. destruct (projlike_inv_q j k n) as [HW [Hh Hi]].
+  rewrite (dim_inv j k n Hjk Hkn) in HW, Hh, Hi.
+  apply herm_idem_effect; assumption.
+Qed.
+
+Lemma wf_inv_at : forall j k n, (j <= k)%nat -> (k <= n)%nat ->
+    wf_assertion (Sig n) (inv_at j k n).
+Proof.
+  intros j k n Hjk Hkn s M HM. cbn in HM. inversion HM; subst.
+  apply is_effect_inv_q; assumption.
+Qed.
+
+Lemma wf_acc_at : forall k n, (k <= n)%nat -> wf_assertion (Sig n) (acc_at k n).
+Proof.
+  intros k n Hk s M HM. cbn in HM. inversion HM; subst.
+  apply is_effect_post_q; exact Hk.
+Qed.
+
+(** *** The communication row, for any assertion ************************
+
+    Alice's outcome lands in [y] and Bob's in [x], so the row's
+    precondition is its postcondition with those two substitutions made. *)
+
+Definition next_cl (n : nat) (Q : assertion (4 * S n)) : formula :=
+  formula_subst (formula_subst (classical_part Q) x (e_var mb)) y (e_var ma).
+
+Lemma kmid_comm_gen : forall n i (Q : assertion (4 * S n)),
+    Sig n ⊢ₖ {{ assertion_subst (assertion_subst Q x (e_var mb)) y (e_var ma) }}
+             kmid i {{ Q }}.
+Proof. intros n i Q. rewrite kmid_at. apply krow_comm. Qed.
+
+Lemma next_acc_unfold : forall n k,
+    next_cl n (acc_at k n)
+    = f_and Zeros (f_and (f_eq (e_var ma) (e_var mb)) (f_eq (e_var mb) (e_var ma))).
+Proof. reflexivity. Qed.
+
+Lemma next_inv_unfold : forall n j k,
+    next_cl n (inv_at j k n)
+    = f_and Zeros (f_and (f_not (f_eq (e_var ma) (e_var mb)))
+                         (f_not (f_eq (e_var mb) (e_var ma)))).
+Proof. reflexivity. Qed.
+
+Lemma pair_eq_tgt : forall n a b s, a = b ->
+    formula_holds (Sig n) s (pair_f a b) = true ->
+    formula_holds (Sig n) s
+      (f_and Zeros (f_and (f_eq (e_var ma) (e_var mb)) (f_eq (e_var mb) (e_var ma))))
+    = true.
+Proof.
+  intros n a b s Hab H.
+  pose proof (pair_f_ma n a b s H) as Hma.
+  pose proof (pair_f_mb n a b s H) as Hmb.
+  apply and_join; [ exact (pair_f_zeros n a b s H) |].
+  apply and_join;
+    [ change (formula_holds (Sig n) s (f_eq (e_var ma) (e_var mb)))
+        with (Nat.eqb (s ma) (s mb))
+    | change (formula_holds (Sig n) s (f_eq (e_var mb) (e_var ma)))
+        with (Nat.eqb (s mb) (s ma)) ];
+    apply Nat.eqb_eq; lia.
+Qed.
+
+Lemma pair_neq_tgt : forall n a b s, a <> b ->
+    formula_holds (Sig n) s (pair_f a b) = true ->
+    formula_holds (Sig n) s
+      (f_and Zeros (f_and (f_not (f_eq (e_var ma) (e_var mb)))
+                          (f_not (f_eq (e_var mb) (e_var ma)))))
+    = true.
+Proof.
+  intros n a b s Hab H.
+  pose proof (pair_f_ma n a b s H) as Hma.
+  pose proof (pair_f_mb n a b s H) as Hmb.
+  apply and_join; [ exact (pair_f_zeros n a b s H) |].
+  apply and_join;
+    [ change (formula_holds (Sig n) s (f_not (f_eq (e_var ma) (e_var mb))))
+        with (negb (Nat.eqb (s ma) (s mb)))
+    | change (formula_holds (Sig n) s (f_not (f_eq (e_var mb) (e_var ma))))
+        with (negb (Nat.eqb (s mb) (s ma))) ];
+    apply negb_true_iff, Nat.eqb_neq; lia.
+Qed.
+
+(** *** One branch of a coupled round ********************************* *)
+
+Ltac dis_fresh :=
+  cbn [formula_vars Zeros Disagree DisA DisB psi_a psi_b expr_vars app];
+  unfold ma, mb, ya, yb, ia, da, oa, ib, db, ob, x, y;
+  cbn [In]; intuition lia.
+
+Lemma dmid_pair_branch : forall n i a b (M : Square (2 ^ (4 * S n))),
+    (S i <= n)%nat -> (a = 0 \/ a = 1)%nat -> (b = 0 \/ b = 1)%nat ->
+    is_effect (dim := 4 * S n) M ->
+    Sig n ⊢ₗ
+      {{ mk_assertion (f_and Zeros Disagree)
+           (qconst n (DistillationComplete.wpA n (S i) a
+                        (DistillationComplete.wpB n (S i) b M))) }}
+      lseq (dmid i)
+      {{ mk_assertion (pair_f a b) (qconst n M) }}.
+Proof.
+  intros n i a b M Hin Ha Hb HM.
+  assert (HWb : is_effect (dim := 4 * S n) (DistillationComplete.wpB n (S i) b M))
+    by (apply effect_wpB; [lia | exact HM]).
+  assert (HWab : is_effect (dim := 4 * S n)
+                   (DistillationComplete.wpA n (S i) a
+                      (DistillationComplete.wpB n (S i) b M)))
+    by (apply effect_wpA; [lia | exact HWb]).
+  cbn [lseq dmid]. unfold mid_a, mid_b.
+  eapply rule_seq with
+    (Q2 := mk_assertion (psi_a (f_and Zeros DisB) a)
+             (qconst n (DistillationComplete.wpB n (S i) b M))).
+  - eapply rule_seq with
+      (Q2 := mk_assertion (f_and Zeros DisB)
+               (qconst n (DistillationComplete.wpA n (S i) a
+                            (DistillationComplete.wpB n (S i) b M)))).
+    + apply accept_a_dead.
+      * intros s Hs. apply and_split in Hs as [_ Hs].
+        rewrite Disagree_split in Hs. apply and_split in Hs as [Hs _].
+        apply (disA_neq n); exact Hs.
+      * intros s Hs. apply and_split in Hs as [HZ Hs].
+        rewrite Disagree_split in Hs. apply and_split in Hs as [_ Hs].
+        apply and_join; assumption.
+      * apply wf_qconst; exact HWab.
+    + apply probe_a_wp; try assumption; dis_fresh.
+  - eapply rule_seq with
+      (Q2 := mk_assertion (psi_a Zeros a)
+               (qconst n (DistillationComplete.wpB n (S i) b M))).
+    + apply accept_b_dead.
+      * intros s Hs. apply psi_a_drop in Hs.
+        apply and_split in Hs as [_ Hs]. apply (disB_neq n); exact Hs.
+      * intros s Hs.
+        pose proof (psi_a_drop n _ a s Hs) as HZB.
+        apply and_split in HZB as [HZ _].
+        apply and_join; [ exact HZ |].
+        apply and_split in Hs as [_ Hs]. exact Hs.
+      * apply wf_qconst; exact HWb.
+    + apply probe_b_wp; try assumption; dis_fresh.
+Qed.
+
+(** *** The merge over the two surviving pairs ************************* *)
+
+Definition fam_pair (n i : nat) (M : Square (2 ^ (4 * S n)))
+           (a0 b0 a1 b1 : nat) : list (qpred (4 * S n) * formula) :=
+  (qconst n (DistillationComplete.wpA n (S i) a0
+               (DistillationComplete.wpB n (S i) b0 M)), pair_f a0 b0)
+  :: (qconst n (DistillationComplete.wpA n (S i) a1
+                  (DistillationComplete.wpB n (S i) b1 M)), pair_f a1 b1) :: nil.
+
+Lemma qsum_pair_denote : forall n i M a0 b0 a1 b1 s,
+    qpred_denote (Sig n) s (qsum (map fst (fam_pair n i M a0 b0 a1 b1)))
+    = Some (DistillationComplete.wpA n (S i) a0
+              (DistillationComplete.wpB n (S i) b0 M)
+            .+ (DistillationComplete.wpA n (S i) a1
+                  (DistillationComplete.wpB n (S i) b1 M)
+                .+ @Zero (2 ^ (4 * S n)) (2 ^ (4 * S n)))).
+Proof. reflexivity. Qed.
+
+Lemma dmid_pair_row : forall n i (M Mpre : Square (2 ^ (4 * S n)))
+                             a0 b0 a1 b1 (tgt : formula),
+    (S i <= n)%nat -> is_effect (dim := 4 * S n) M ->
+    (a0 = 0 \/ a0 = 1)%nat -> (b0 = 0 \/ b0 = 1)%nat ->
+    (a1 = 0 \/ a1 = 1)%nat -> (b1 = 0 \/ b1 = 1)%nat -> a0 <> a1 ->
+    (DistillationComplete.wpA n (S i) a0 (DistillationComplete.wpB n (S i) b0 M)
+     .+ DistillationComplete.wpA n (S i) a1 (DistillationComplete.wpB n (S i) b1 M))
+    = Mpre ->
+    (forall s, formula_holds (Sig n) s (pair_f a0 b0) = true ->
+               formula_holds (Sig n) s tgt = true) ->
+    (forall s, formula_holds (Sig n) s (pair_f a1 b1) = true ->
+               formula_holds (Sig n) s tgt = true) ->
+    Sig n ⊢ₗ {{ mk_assertion (f_and Zeros Disagree) (qconst n Mpre) }}
+             lseq (dmid i)
+             {{ mk_assertion tgt (qconst n M) }}.
+Proof.
+  intros n i M Mpre a0 b0 a1 b1 tgt Hin HM Ha0 Hb0 Ha1 Hb1 Hne Hsum Ht0 Ht1.
+  eapply rule_conseq with
+    (Q := mk_assertion (f_and Zeros Disagree)
+            (qsum (map fst (fam_pair n i M a0 b0 a1 b1))))
+    (R := mk_assertion (fdisj (map snd (fam_pair n i M a0 b0 a1 b1)))
+            (qconst n M)).
+  - apply entails_q_eq; [ intros s H; exact H |].
+    intros s _. rewrite qsum_pair_denote, Mplus_0_r, Hsum. reflexivity.
+  - apply rule_branch_accum_l.
+    + apply Forall_cons; [ apply dmid_pair_branch; assumption |].
+      apply Forall_cons; [ apply dmid_pair_branch; assumption |].
+      apply Forall_nil.
+    + repeat constructor. intros s H0 H1.
+      apply pair_f_ma in H0. apply pair_f_ma in H1. congruence.
+    + intros s. rewrite qsum_pair_denote. eexists; reflexivity.
+  - apply entails_q_eq; [| intros s _; reflexivity ].
+    intros s H.
+    apply (fdisj_elim _ (Sig n) s (map snd (fam_pair n i M a0 b0 a1 b1)) tgt);
+      [| exact H].
+    apply Forall_cons; [ exact (Ht0 s) |].
+    apply Forall_cons; [ exact (Ht1 s) |].
+    apply Forall_nil.
+  - apply wf_qconst; exact HM.
+Qed.
+
 (** i < k.  Induction on [d], the number of rejecting rounds still to come;
-    [i + S d = k] ties it to the round index, because [k - i] is not
-    structurally decreasing and [induction] will not take it. *)
+    [S i + d = k] ties it to the round index, because [k - i] is not
+    structurally decreasing and [induction] will not take it.
+
+    [d = 0] is the round that ACCEPTS: [S i = k], the two agreeing outcome
+    pairs survive ([round_sum_accept]) and the tail is [phase_accept].
+    [d = S d'] is a round that REJECTS: the two disagreeing pairs survive
+    ([round_sum_reject]) and the tail is the induction hypothesis. *)
 Lemma phase_reject : forall n k d i,
     (k <= n)%nat -> (S i + d = k)%nat ->
     Sig n ⊢ₚ {{ inv_at (S i) k n }} tround i (n - i) {{ distill_post k n }}.
-Admitted.
+Proof.
+  intros n k d. induction d as [| d' IH]; intros i Hkn Hik.
+  - (* S i = k : the accepting round *)
+    replace (n - i)%nat with (S (n - S i)) by lia.
+    eapply rule_par_comp with
+      (d := dmid i) (k := kmid i) (t := tround (S i) (n - S i))
+      (Q1 := mk_assertion (next_cl n (acc_at k n)) (qconst n (post_q k n)))
+      (Q2 := acc_at k n).
+    + exact (cut_step i (n - S i)).
+    + exact (wf_program_tround i (S (n - S i))).
+    + apply wf_acc_at; exact Hkn.
+    + apply wf_distill_post; exact Hkn.
+    + apply rule_par_disjoint; [ apply disj_dmid |].
+      rewrite next_acc_unfold.
+      apply dmid_pair_row with (M := post_q k n) (a0 := 0%nat) (b0 := 0%nat)
+                               (a1 := 1%nat) (b1 := 1%nat);
+        try lia; try (left; reflexivity); try (right; reflexivity).
+      * apply is_effect_post_q; exact Hkn.
+      * replace (S i) with k by lia.
+        exact (DistillationComplete.round_sum_accept n k Hkn).
+      * intros s H. apply (pair_eq_tgt n 0%nat 0%nat s eq_refl H).
+      * intros s H. apply (pair_eq_tgt n 1%nat 1%nat s eq_refl H).
+    + apply kmid_comm_gen.
+    + replace (S i) with k by lia. apply phase_accept; exact Hkn.
+  - (* S i < k : a rejecting round *)
+    replace (n - i)%nat with (S (n - S i)) by lia.
+    eapply rule_par_comp with
+      (d := dmid i) (k := kmid i) (t := tround (S i) (n - S i))
+      (Q1 := mk_assertion (next_cl n (inv_at (S (S i)) k n))
+                          (qconst n (inv_q (S (S i)) k n)))
+      (Q2 := inv_at (S (S i)) k n).
+    + exact (cut_step i (n - S i)).
+    + exact (wf_program_tround i (S (n - S i))).
+    + apply wf_inv_at; lia.
+    + apply wf_distill_post; exact Hkn.
+    + apply rule_par_disjoint; [ apply disj_dmid |].
+      rewrite next_inv_unfold.
+      apply dmid_pair_row with (M := inv_q (S (S i)) k n) (a0 := 0%nat) (b0 := 1%nat)
+                               (a1 := 1%nat) (b1 := 0%nat);
+        try lia; try (left; reflexivity); try (right; reflexivity).
+      * apply is_effect_inv_q; lia.
+      * exact (DistillationComplete.round_sum_reject n k (S i)
+                 ltac:(lia) Hkn).
+      * intros s H. apply (pair_neq_tgt n 0%nat 1%nat s ltac:(lia) H).
+      * intros s H. apply (pair_neq_tgt n 1%nat 0%nat s ltac:(lia) H).
+    + apply kmid_comm_gen.
+    + apply IH; lia.
+Qed.
+
+(** ** The head: round 0 ***********************************************
+
+    The head has no accept test — nothing has been received yet — so its
+    local row is three initialisations and a probe on each side.  The probe
+    is round 0's, and round 0 either accepts ([k = 0]) or rejects, so the
+    merge is over outcome PAIRS exactly as in [dmid]. *)
+
+Lemma pre_q_C : forall k n, pre_q k n = DistillationComplete.pre_q k n.
+Proof. reflexivity. Qed.
+
+Lemma disj_dhead : lrow_disj dhead.
+Proof.
+  unfold dhead, lrow_disj, DisjMP. cbn [row_leaves app].
+  constructor; [ constructor; [| constructor] | constructor; [constructor | constructor] ].
+  unfold non_interfering, head_a, head_b.
+  cbn [lblock_change lblock_read lblock_qvar bexpr_vars expr_vars app flat_map].
+  unfold ia, da, oa, ma, ib, db, ob, mb, Ak, At, Bk, Bt.
+  repeat split; intros v Hv Hw; cbn in Hv, Hw; intuition lia.
+Qed.
+
+Ltac head_fresh :=
+  unfold Zeros, psi_a, ma, mb, ya, yb, ia, da, oa, ib, db, ob;
+  cbn; intuition lia.
+
+Lemma dhead_pair_branch : forall n a b (M : Square (2 ^ (4 * S n))),
+    (a = 0 \/ a = 1)%nat -> (b = 0 \/ b = 1)%nat ->
+    is_effect (dim := 4 * S n) M ->
+    Sig n ⊢ₗ
+      {{ mk_assertion (f_bexp b_true)
+           (qconst n (DistillationComplete.wpA n 0
+                        (a) (DistillationComplete.wpB n 0 b M))) }}
+      lseq dhead
+      {{ mk_assertion (pair_f a b) (qconst n M) }}.
+Proof.
+  intros n a b M Ha Hb HM.
+  assert (HWb : is_effect (dim := 4 * S n) (DistillationComplete.wpB n 0 b M))
+    by (apply effect_wpB; [lia | exact HM]).
+  cbn [lseq dhead]. unfold head_a, head_b.
+  eapply rule_conseq with (R := mk_assertion (pair_f a b) (qconst n M)).
+  4: apply wf_qconst; exact HM.
+  3: apply entails_refl.
+  2:{ eapply rule_seq.
+      2:{ eapply rule_seq; [ apply rule_assign |].
+          eapply rule_seq; [ apply rule_assign |].
+          eapply rule_seq; [ apply rule_assign |].
+          apply probe_b_wp; try assumption; head_fresh. }
+      eapply rule_seq; [ apply rule_assign |].
+      eapply rule_seq; [ apply rule_assign |].
+      eapply rule_seq; [ apply rule_assign |].
+      apply probe_a_wp; try assumption; head_fresh. }
+  apply entails_q_eq; intros s _; reflexivity.
+Qed.
+
+Definition fam_head (n : nat) (M : Square (2 ^ (4 * S n)))
+           (a0 b0 a1 b1 : nat) : list (qpred (4 * S n) * formula) :=
+  (qconst n (DistillationComplete.wpA n 0 a0
+               (DistillationComplete.wpB n 0 b0 M)), pair_f a0 b0)
+  :: (qconst n (DistillationComplete.wpA n 0 a1
+                  (DistillationComplete.wpB n 0 b1 M)), pair_f a1 b1) :: nil.
+
+Lemma qsum_head_denote : forall n M a0 b0 a1 b1 s,
+    qpred_denote (Sig n) s (qsum (map fst (fam_head n M a0 b0 a1 b1)))
+    = Some (DistillationComplete.wpA n 0 a0 (DistillationComplete.wpB n 0 b0 M)
+            .+ (DistillationComplete.wpA n 0 a1 (DistillationComplete.wpB n 0 b1 M)
+                .+ @Zero (2 ^ (4 * S n)) (2 ^ (4 * S n)))).
+Proof. reflexivity. Qed.
+
+Lemma dhead_pair_row : forall n (M Mpre : Square (2 ^ (4 * S n)))
+                              a0 b0 a1 b1 (tgt : formula),
+    is_effect (dim := 4 * S n) M ->
+    (a0 = 0 \/ a0 = 1)%nat -> (b0 = 0 \/ b0 = 1)%nat ->
+    (a1 = 0 \/ a1 = 1)%nat -> (b1 = 0 \/ b1 = 1)%nat -> a0 <> a1 ->
+    (DistillationComplete.wpA n 0 a0 (DistillationComplete.wpB n 0 b0 M)
+     .+ DistillationComplete.wpA n 0 a1 (DistillationComplete.wpB n 0 b1 M))
+    = Mpre ->
+    (forall s, formula_holds (Sig n) s (pair_f a0 b0) = true ->
+               formula_holds (Sig n) s tgt = true) ->
+    (forall s, formula_holds (Sig n) s (pair_f a1 b1) = true ->
+               formula_holds (Sig n) s tgt = true) ->
+    Sig n ⊢ₗ {{ mk_assertion (f_bexp b_true) (qconst n Mpre) }}
+             lseq dhead
+             {{ mk_assertion tgt (qconst n M) }}.
+Proof.
+  intros n M Mpre a0 b0 a1 b1 tgt HM Ha0 Hb0 Ha1 Hb1 Hne Hsum Ht0 Ht1.
+  eapply rule_conseq with
+    (Q := mk_assertion (f_bexp b_true)
+            (qsum (map fst (fam_head n M a0 b0 a1 b1))))
+    (R := mk_assertion (fdisj (map snd (fam_head n M a0 b0 a1 b1)))
+            (qconst n M)).
+  - apply entails_q_eq; [ intros s H; exact H |].
+    intros s _. rewrite qsum_head_denote, Mplus_0_r, Hsum. reflexivity.
+  - apply rule_branch_accum_l.
+    + apply Forall_cons; [ apply dhead_pair_branch; assumption |].
+      apply Forall_cons; [ apply dhead_pair_branch; assumption |].
+      apply Forall_nil.
+    + repeat constructor. intros s H0 H1.
+      apply pair_f_ma in H0. apply pair_f_ma in H1. congruence.
+    + intros s. rewrite qsum_head_denote. eexists; reflexivity.
+  - apply entails_q_eq; [| intros s _; reflexivity ].
+    intros s H.
+    apply (fdisj_elim _ (Sig n) s (map snd (fam_head n M a0 b0 a1 b1)) tgt);
+      [| exact H].
+    apply Forall_cons; [ exact (Ht0 s) |].
+    apply Forall_cons; [ exact (Ht1 s) |].
+    apply Forall_nil.
+  - apply wf_qconst; exact HM.
+Qed.
+
+(** ** Paper Theorem 5.4, the acceptance triple ************************
+
+    One [Par-Comp-MP] for the head, then the three phases: round 0 is
+    either the accepting round (and the tail is [phase_accept]) or the
+    first rejecting one (and the tail is [phase_reject]). *)
+
+Lemma distill_derivable : forall k n, (k <= n)%nat ->
+    Sig n ⊢ₚ {{ distill_pre k n }} distill n {{ distill_post k n }}.
+Proof.
+  intros k n Hk. destruct k as [| k'].
+  - (* round 0 is the accepting round *)
+    eapply rule_par_comp with
+      (d := dhead) (k := khead) (t := tround 0 n)
+      (Q1 := mk_assertion (next_cl n (acc_at 0 n)) (qconst n (post_q 0 n)))
+      (Q2 := acc_at 0 n).
+    + exact (cut_head n).
+    + exact (wf_program_distill n).
+    + apply wf_acc_at; exact Hk.
+    + apply wf_distill_post; exact Hk.
+    + apply rule_par_disjoint; [ apply disj_dhead |].
+      rewrite next_acc_unfold.
+      apply dhead_pair_row with (M := post_q 0 n) (a0 := 0%nat) (b0 := 0%nat)
+                                (a1 := 1%nat) (b1 := 1%nat);
+        try (left; reflexivity); try (right; reflexivity); try lia.
+      * apply is_effect_post_q; exact Hk.
+      * rewrite pre_q_C, <- DistillationComplete.inv_q_0.
+        exact (DistillationComplete.round_sum_accept n 0 Hk).
+      * intros s H. apply (pair_eq_tgt n 0%nat 0%nat s eq_refl H).
+      * intros s H. apply (pair_eq_tgt n 1%nat 1%nat s eq_refl H).
+    + rewrite khead_at. apply krow_comm.
+    + replace (tround 0 n) with (tround 0 (n - 0)) by (f_equal; lia).
+      apply phase_accept; exact Hk.
+  - (* round 0 rejects; the first accepting round is [S k'] *)
+    eapply rule_par_comp with
+      (d := dhead) (k := khead) (t := tround 0 n)
+      (Q1 := mk_assertion (next_cl n (inv_at 1 (S k') n))
+                          (qconst n (inv_q 1 (S k') n)))
+      (Q2 := inv_at 1 (S k') n).
+    + exact (cut_head n).
+    + exact (wf_program_distill n).
+    + apply wf_inv_at; lia.
+    + apply wf_distill_post; exact Hk.
+    + apply rule_par_disjoint; [ apply disj_dhead |].
+      rewrite next_inv_unfold.
+      apply dhead_pair_row with (M := inv_q 1 (S k') n) (a0 := 0%nat) (b0 := 1%nat)
+                                (a1 := 1%nat) (b1 := 0%nat);
+        try (left; reflexivity); try (right; reflexivity); try lia.
+      * apply is_effect_inv_q; lia.
+      * rewrite pre_q_C, <- DistillationComplete.inv_q_0.
+        exact (DistillationComplete.round_sum_reject n (S k') 0 ltac:(lia) Hk).
+      * intros s H. apply (pair_neq_tgt n 0%nat 1%nat s ltac:(lia) H).
+      * intros s H. apply (pair_neq_tgt n 1%nat 0%nat s ltac:(lia) H).
+    + rewrite khead_at. apply krow_comm.
+    + replace (tround 0 n) with (tround 0 (n - 0)) by (f_equal; lia).
+      apply (phase_reject n (S k') k' 0); lia.
+Qed.
+
+(** For a run whose FIRST accepting round is [k]: if the input sits where
+    rounds [0..k-1] fail the bilateral test and round [k] passes it, then
+    the protocol terminates with both parties latched on index [k+1], the
+    already-rejected rounds in the [NeqSub] frame and round [k] in [EqSub].
+
+    This is the [acc] half of Theorem 5.4.  The [good] half replaces
+    [Pass]/[EqSub] by [Good_k]/[Φ00] and is not stated yet.
+
+    Nothing merges the [k]'s: the quantum postcondition depends on [k], so
+    Branch-Accum — which needs one postcondition shared across the family —
+    does not apply.  The paper does not merge them either; the k's meet
+    only in the Werner-input evaluation, which is arithmetic, not a rule. *)
+Theorem distillation_acc : forall (k n : nat), (k <= n)%nat ->
+  Sig n ⊨ {{ distill_pre k n }} distill n {{ distill_post k n }}.
+Proof.
+  intros k n Hk.
+  exact (soundness (Sig n) (d_wf_interp n) _ _ _ (distill_derivable k n Hk)).
+Qed.
