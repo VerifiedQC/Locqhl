@@ -1231,6 +1231,61 @@ Section SoundnessFacts.
     cbn [fst]. rewrite Hp. destruct (p s); cbn [map]; rewrite IH; reflexivity.
   Qed.
 
+  (** The denotational counterpart of [local_step_upd]: a local block that
+      never mentions [y] commutes with the store update [y := v].  This is
+      what the local Aux-Subst rule's soundness runs on, exactly as
+      [Term_upd] is what the distributed one runs on. *)
+  Lemma denote_upd :
+    forall y v (L : lblock) (E : ensemble dim),
+      ~ In y (lblock_change L) ->
+      ~ In y (lblock_read L) ->
+      denote L (upd_ens y v E) = upd_ens y v (denote L E).
+  Proof.
+    intros y v L; induction L as
+      [| x e | q | U qs | x M qs | L1 IH1 L2 IH2 | b L1 IH1 L0 IH0];
+      intros E Hc Hr; cbn [denote].
+    - reflexivity.
+    - symmetry. apply upd_ens_assign_comm.
+      + intro He; apply Hc; cbn [lblock_change]; left; exact He.
+      + intro He; apply Hr; cbn [lblock_read]; exact He.
+    - symmetry. apply upd_ens_qmap_comm.
+    - symmetry. apply upd_ens_qmap_comm.
+    - assert (Hxy : x <> y)
+        by (intro; subst; apply Hc; cbn [lblock_change]; left; reflexivity).
+      symmetry.
+      unfold upd_ens. rewrite !flat_map_concat_map, !map_map.
+      rewrite concat_map, map_map. f_equal. apply map_ext. intros [s r].
+      unfold upd_st; cbn [fst snd].
+      rewrite !map_map. apply map_ext. intro m.
+      f_equal. symmetry. apply store_update_comm. exact (not_eq_sym Hxy).
+    - assert (Hc1 : ~ In y (lblock_change L1))
+        by (intro Hin; apply Hc; cbn [lblock_change]; apply in_or_app; auto).
+      assert (Hr1 : ~ In y (lblock_read L1))
+        by (intro Hin; apply Hr; cbn [lblock_read]; apply in_or_app; auto).
+      assert (Hc2 : ~ In y (lblock_change L2))
+        by (intro Hin; apply Hc; cbn [lblock_change]; apply in_or_app; auto).
+      assert (Hr2 : ~ In y (lblock_read L2))
+        by (intro Hin; apply Hr; cbn [lblock_read]; apply in_or_app; auto).
+      rewrite IH1 by assumption. apply IH2; assumption.
+    - assert (Hb : ~ In y (bexpr_vars b))
+        by (intro Hin; apply Hr; cbn [lblock_read]; apply in_or_app; auto).
+      assert (Hc1 : ~ In y (lblock_change L1))
+        by (intro Hin; apply Hc; cbn [lblock_change]; apply in_or_app; auto).
+      assert (Hc0 : ~ In y (lblock_change L0))
+        by (intro Hin; apply Hc; cbn [lblock_change]; apply in_or_app; auto).
+      assert (Hr1 : ~ In y (lblock_read L1)).
+      { intro Hin; apply Hr; cbn [lblock_read]; apply in_or_app; right;
+          apply in_or_app; auto. }
+      assert (Hr0 : ~ In y (lblock_read L0)).
+      { intro Hin; apply Hr; cbn [lblock_read]; apply in_or_app; right;
+          apply in_or_app; auto. }
+      rewrite !ensemble_filter_upd
+        by (intro s0; first [ apply eval_bool_update_notin; exact Hb
+                            | f_equal; apply eval_bool_update_notin; exact Hb ]).
+      rewrite IH1, IH0 by assumption.
+      symmetry. apply upd_ens_app.
+  Qed.
+
   Lemma local_step_upd :
     forall y v (L : lblock) (E : ensemble dim) (G : local_config dim),
       ~ In y (lblock_change L) ->
