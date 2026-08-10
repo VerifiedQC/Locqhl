@@ -1071,3 +1071,40 @@ Proof.
   - exact (wf_phase_aligned_tround i r).
   - exact (wf_phase_independence_tround i r).
 Qed.
+
+(** ** The idle rounds *************************************************
+
+    Under [Acc k] the latch [da] is already 1, so both accept tests take
+    their else branch: the guard [ma = x /\ da = 0] is contradictory. *)
+
+Definition guard_a : bexpr :=
+  b_and (b_eq (e_var ma) (e_var x)) (b_eq (e_var da) (e_val 0%nat)).
+Definition guard_b : bexpr :=
+  b_and (b_eq (e_var mb) (e_var y)) (b_eq (e_var db) (e_val 0%nat)).
+
+Lemma guard_a_unfold : forall i, accept_a i =
+  <{ if guard_a then (oa := (e_val 1%nat) ; da := (e_val 1%nat) ; ia := (e_val (S i)))
+     else skip }>.
+Proof. reflexivity. Qed.
+
+Lemma guard_b_unfold : forall i, accept_b i =
+  <{ if guard_b then (ob := (e_val 1%nat) ; db := (e_val 1%nat) ; ib := (e_val (S i)))
+     else skip }>.
+Proof. reflexivity. Qed.
+
+(* [Acc k] pins da = 1 while the guard demands da = 0, so the conjunction
+   is false in every store and all three entailment obligations are
+   vacuous — whatever the target assertion is. *)
+Lemma acc_guard_a_true : forall n k (R : assertion (4 * S n)),
+    and_guard (distill_post k n) guard_a true ⊨[Sig n] R.
+Proof.
+  intros n k R.
+  assert (Hf : forall s, formula_holds (Sig n) s
+                 (classical_part (and_guard (distill_post k n) guard_a true))
+               = false).
+  { intro s. cbn. destruct (s da) as [| [| d]]; cbn;
+      rewrite ?andb_false_r, ?andb_false_l; reflexivity. }
+  split; [| split];
+    [ intros s Hs | intros s Hs | intros s M N Hs ];
+    rewrite Hf in Hs; discriminate.
+Qed.
