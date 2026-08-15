@@ -15,11 +15,10 @@ cd "$(dirname "$0")/.."
 
 SRC_DIRS="Core CaseStudies"
 BASELINE_FILE="scripts/admit-baseline.txt"
-# Files where open proofs are currently tolerated (the soundness development
-# and the teleportation case study). Tighten as proofs land.
-ALLOWED_OPEN="Core/Soundness.v
-Core/SoundnessFacts.v
-CaseStudies/Teleportation.v"
+# Files where open proofs are currently tolerated.  Empty: every proof in
+# Core/ and CaseStudies/ is closed.  Add a file here only alongside a
+# matching bump of the baseline.
+ALLOWED_OPEN=""
 
 baseline=$(tr -d '[:space:]' < "$BASELINE_FILE")
 
