@@ -52,3 +52,5 @@ CaseStudies/SwapComplete.v
 CaseStudies/EntanglementSwapping.v
 CaseStudies/NonlocalCNOTComplete.v
 CaseStudies/NonlocalCNOT.v
+CaseStudies/DistillationComplete.v
+CaseStudies/Distillation.v
