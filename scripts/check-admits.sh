@@ -15,9 +15,9 @@ cd "$(dirname "$0")/.."
 
 SRC_DIRS="Core CaseStudies"
 BASELINE_FILE="scripts/admit-baseline.txt"
-# Files where open proofs are currently tolerated: the distillation case
-# study, whose derivation is still to be written.  Add a file here only
-# alongside a matching bump of the baseline, and lower both as proofs land.
+# Files where open proofs are currently tolerated.  Empty: every proof in
+# Core/ and CaseStudies/ is closed.  Add a file here only alongside a
+# matching bump of the baseline.
 ALLOWED_OPEN=""
 
 baseline=$(tr -d '[:space:]' < "$BASELINE_FILE")
