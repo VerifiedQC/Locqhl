@@ -2194,9 +2194,9 @@ Proof.
   rewrite HH, HI. exact (proj2 (herm_idem_effect d M HW HH HI)).
 Qed.
 
-Lemma projlike_Pi : forall v, projlike (DistillationComplete.Pi v).
+Lemma projlike_Pi : forall v, projlike (SharedKernel.Pi v).
 Proof.
-  intro v. unfold DistillationComplete.Pi.
+  intro v. unfold SharedKernel.Pi.
   destruct (Nat.eqb v 0%nat); repeat split;
     solve [ auto with wf_db | lma' ].
 Qed.
