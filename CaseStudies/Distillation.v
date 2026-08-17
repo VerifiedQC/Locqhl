@@ -221,9 +221,6 @@ Definition EPR : Square 4 := ∣Φ+⟩ × ∣Φ+⟩ †.
 Definition Ev : Square 4 := ∣0⟩⟨0∣ ⊗ ∣0⟩⟨0∣ .+ ∣1⟩⟨1∣ ⊗ ∣1⟩⟨1∣.
 Definition Od : Square 4 := ∣0⟩⟨0∣ ⊗ ∣1⟩⟨1∣ .+ ∣1⟩⟨1∣ ⊗ ∣0⟩⟨0∣.
 
-Lemma Ev_Od_I : Ev .+ Od = I 4.
-Proof. unfold Ev, Od; lma'. Qed.
-
 (** The four one-round effects, on a round's block (keep pair) ⊗ (test
     pair).  [Pass] is the bilateral test: the two pairs carry the SAME
     bit-flip label, i.e. the same parity.  The paper writes it
@@ -234,12 +231,6 @@ Definition Pass   : Square 16 := Ev ⊗ Ev .+ Od ⊗ Od.
 Definition Rej    : Square 16 := Ev ⊗ Od .+ Od ⊗ Ev.
 Definition EqSub  : Square 16 := I 4 ⊗ Ev.
 Definition NeqSub : Square 16 := I 4 ⊗ Od.
-
-Lemma Pass_Rej_I : Pass .+ Rej = I 16.
-Proof. unfold Pass, Rej, Ev, Od. lma'; auto 20 with wf_db. Qed.
-
-Lemma EqSub_NeqSub_I : EqSub .+ NeqSub = I 16.
-Proof. unfold EqSub, NeqSub, Ev, Od. lma'; auto 20 with wf_db. Qed.
 
 (** ** The specification, for the run whose first accepting round is k ***
 
@@ -752,7 +743,6 @@ Proof.
                end; lia.
 Qed.
 
-
 Lemma flat_map_ext : forall {A B} (f g : A -> list B) (l : list A),
     (forall a, f a = g a) -> flat_map f l = flat_map g l.
 Proof.
@@ -1061,16 +1051,6 @@ Definition guard_a : bexpr :=
   b_and (b_eq (e_var ma) (e_var x)) (b_eq (e_var da) (e_val 0%nat)).
 Definition guard_b : bexpr :=
   b_and (b_eq (e_var mb) (e_var y)) (b_eq (e_var db) (e_val 0%nat)).
-
-Lemma guard_a_unfold : forall i, accept_a i =
-  <{ if guard_a then (oa := (e_val 1%nat) ; da := (e_val 1%nat) ; ia := (e_val (S i)))
-     else skip }>.
-Proof. reflexivity. Qed.
-
-Lemma guard_b_unfold : forall i, accept_b i =
-  <{ if guard_b then (ob := (e_val 1%nat) ; db := (e_val 1%nat) ; ib := (e_val (S i)))
-     else skip }>.
-Proof. reflexivity. Qed.
 
 (* [Acc k] pins da = 1 while the guard demands da = 0, so the conjunction
    is false in every store and all three entailment obligations are
@@ -1628,9 +1608,6 @@ Qed.
     checks: if the two copies ever drift apart, [reflexivity] stops working
     and the derivation breaks with it. *)
 Lemma post_q_C : forall k n, post_q k n = DistillationComplete.post_q k n.
-Proof. reflexivity. Qed.
-
-Lemma inv_q_C : forall j k n, inv_q j k n = DistillationComplete.inv_q j k n.
 Proof. reflexivity. Qed.
 
 (** *** One branch *****************************************************

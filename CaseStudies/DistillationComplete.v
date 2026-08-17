@@ -51,15 +51,6 @@ Proof.
   reflexivity.
 Qed.
 
-(** Split by the parity of the two outcomes instead: the two that agree
-    make [Ev], the two that differ make [Od].  This is what the accepting
-    and rejecting rounds need in place of [Pi_pair_sum]. *)
-Lemma Pi_pair_eq : Pi 0%nat ⊗ Pi 0%nat .+ Pi 1%nat ⊗ Pi 1%nat = Ev.
-Proof. unfold Pi, Ev; cbn [Nat.eqb]; reflexivity. Qed.
-
-Lemma Pi_pair_neq : Pi 0%nat ⊗ Pi 1%nat .+ Pi 1%nat ⊗ Pi 0%nat = Od.
-Proof. unfold Pi, Od; cbn [Nat.eqb]; reflexivity. Qed.
-
 (** ** The predicates, repeated from Distillation.v ****************** *)
 
 Definition Pass   : Square 16 := Ev ⊗ Ev .+ Od ⊗ Od.
@@ -664,17 +655,6 @@ Proof.
   rewrite !wpB_local by (try lia; auto with wf_db).
   rewrite !wpA_local by (try lia; auto with wf_db).
   rewrite kron3_plus, core_reject'. reflexivity.
-Qed.
-
-(** An idle round as a whole, from the two halves. *)
-Lemma round_sum_idle : forall n k j,
-    (k < j)%nat -> (j <= n)%nat ->
-    round_sum n j (post_q k n) = post_q k n.
-Proof.
-  intros n k j H1 H2. unfold round_sum, round_wp.
-  rewrite <- !wpA_plus.
-  rewrite (wpB_sum_idle n k j H1 H2).
-  apply (wpA_sum_idle n k j H1 H2).
 Qed.
 
 (** And [inv_q 0 k n] is the specification's precondition, up to the unit
