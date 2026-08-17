@@ -85,12 +85,11 @@ If you use LocQHL in your research, please cite it. A machine-readable
 [`CITATION.cff`](CITATION.cff) is provided; a BibTeX entry:
 
 ```bibtex
-@software{locqhl,
-  title  = {{LocQHL}: A Rocq Mechanization of a Hoare-Style Program Logic for
-            {LOCC} Quantum Protocols},
-  author = {Chang, Le and Tao, Runzhou},
-  year   = {2026},
-  url    = {https://github.com/VerifiedQC/Locqhl},
-  note   = {Apache-2.0}
+@misc{locqhl,
+  title        = {{LocQHL}: A Rocq Mechanization of a Hoare-Style Program Logic
+                  for {LOCC} Quantum Protocols},
+  year         = {2026},
+  howpublished = {\url{https://github.com/VerifiedQC/Locqhl}},
+  note         = {Rocq development, Apache-2.0}
 }
 ```

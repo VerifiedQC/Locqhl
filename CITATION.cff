@@ -10,14 +10,9 @@ abstract: >-
   entanglement distillation), each with a completeness counterpart.
 type: software
 authors:
-  - family-names: Chang
-    given-names: Le
-  - family-names: Tao
-    given-names: Runzhou
-    affiliation: Columbia University
+  - name: "The LocQHL developers (University of Maryland)"
 repository-code: "https://github.com/VerifiedQC/Locqhl"
 license: Apache-2.0
-year: 2026
 keywords:
   - quantum program logic
   - LOCC
