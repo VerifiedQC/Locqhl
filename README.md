@@ -1,5 +1,6 @@
 # LocQHL — a Rocq mechanization of a Hoare-style logic for LOCC quantum protocols
 
+[![CI](https://github.com/VerifiedQC/Locqhl/actions/workflows/ci.yml/badge.svg)](https://github.com/VerifiedQC/Locqhl/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Rocq](https://img.shields.io/badge/Rocq-9.1-orange.svg)](https://rocq-prover.org/)
 [![admits](https://img.shields.io/badge/admits-0-brightgreen.svg)](#status)
@@ -47,6 +48,7 @@ needed.
 | `TraceFacts.v` | the Löwner-order/trace bridge (trace nonnegativity of positive pairings via the spectral theorem, monotonicity of `degree` under entailment) and closure of state legitimacy under the quantum actions |
 | `WellFormed.v` | footprints of program phrases and the well-formedness conditions of a distributed program |
 | `Rules.v` | the proof system: `local_derivable` (`⊢ₗ`, 7 local rules) and `derivable` (`⊢ₚ`: Par-Disjoint-MP, Par-Comp-MP, Comm-Done, Comm-Select-MP, Branch-Accum, Conseq) |
+| `SoundnessFacts.v` | the supporting metatheory: trajectory commutation, schedule normalization, and the degree algebra |
 | `Soundness.v` | soundness of the proof system: preservation of state legitimacy along execution (`term_preservation`), the per-rule validity obligations, and the assembly of the top-level soundness theorem |
 
 ### Case studies (`CaseStudies/`)
@@ -63,10 +65,19 @@ needed.
 The proof development is complete with **no admits** and depends only on Rocq's
 standard axioms. See `Core/Soundness.v` for the top-level soundness theorem and
 `CaseStudies/` for the four mechanized protocols.
+These claims can be regenerated at any time:
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/manifest.sh` | machine-generated proof manifest: every definition and lemma, with file, line, and proof status |
+| `scripts/check-admits.sh` | the CI admit gate (rejects commits introducing admitted proofs) |
+| `scripts/check-assumptions.sh` | `Print Assumptions` on the main theorems: prints the exact axiom closure |
 
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
+The vendored [QuantumLib](https://github.com/inQWIRE/QuantumLib) under
+`third_party/` retains its own license.
 
 ## Citation
 
