@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use LocQHL in your research, please cite it as below."
+title: "LocQHL: A Rocq Mechanization of a Hoare-Style Program Logic for LOCC Quantum Protocols"
+abstract: >-
+  A Hoare-style program logic for LOCC (Local Operations and Classical
+  Communication) quantum protocols — the language, its operational semantics,
+  the assertion language, and the proof system — fully mechanized in the Rocq
+  Prover, with a machine-checked soundness theorem and four worked protocol case
+  studies (teleportation, entanglement swapping, non-local CNOT, and
+  entanglement distillation), each with a completeness counterpart.
+type: software
+authors:
+  - family-names: Chang
+    given-names: Le
+  - family-names: Tao
+    given-names: Runzhou
+    affiliation: Columbia University
+repository-code: "https://github.com/VerifiedQC/Locqhl"
+license: Apache-2.0
+year: 2026
+keywords:
+  - quantum program logic
+  - LOCC
+  - Hoare logic
+  - Rocq
+  - formal verification
