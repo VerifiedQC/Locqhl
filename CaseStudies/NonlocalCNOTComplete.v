@@ -36,26 +36,14 @@
 From Stdlib Require Import Arith.PeanoNat.
 From QuantumLib Require Import Matrix Quantum Pad VecSet CauchySchwarz.
 From Locqhl.CaseStudies Require BellComplete.
+From Locqhl.CaseStudies Require Import SharedKernel.
 
 Local Open Scope matrix_scope.
 
-(* The Löwner order, written exactly as in Locqhl.Core.Assertions, in
-   BellComplete and in SwapComplete.  Same body, so the case study's
-   obligation is closed by conversion. *)
-Definition lowner {n} (M N : Square n) : Prop :=
-  positive_semidefinite (N .+ (- C1) .* M)%M.
-
-Notation "M ⊑ N" := (lowner M N) (at level 70).
-
 (* ---- The matrices --------------------------------------------------- *)
-
-Definition EPR : Square 4 := ∣Φ+⟩ × ∣Φ+⟩†.
 
 (** The input: EPR(A,B) ⊗ EPR(C,C') ⊗ EPR(T,T'), three adjacent pairs. *)
 Definition Psi0 : Vector (2 ^ 6) := ∣Φ+⟩ ⊗ ∣Φ+⟩ ⊗ ∣Φ+⟩.
-
-Definition Pi (b : nat) : Square 2 :=
-  if Nat.eqb b 0%nat then ∣0⟩⟨0∣ else ∣1⟩⟨1∣.
 
 (** The reference block (C,C',T,T'), block-local indices: C is 0, T is 2. *)
 Definition CNOT_CT : Square (2 ^ 4) := pad_ctrl 4 0 2 σx.
@@ -97,12 +85,8 @@ Definition Auv (u v : nat) : Square (2 ^ 6) := (Kuv u v) † × Post × (Kuv u v
 
 (* ---- Well-formedness ------------------------------------------------- *)
 
-Lemma WF_EPR : WF_Matrix EPR.
-Proof. unfold EPR; auto with wf_db. Qed.
 #[export] Hint Resolve WF_EPR : wf_db.
 
-Lemma WF_Pi : forall b, WF_Matrix (Pi b).
-Proof. intros b; unfold Pi; destruct (Nat.eqb b 0%nat); auto with wf_db. Qed.
 #[export] Hint Resolve WF_Pi : wf_db.
 
 Lemma WF_Psi0 : WF_Matrix Psi0.
@@ -206,21 +190,6 @@ Qed.
 
 (* ---- The Bell projector ---------------------------------------------- *)
 
-Lemma EPR_herm : EPR † = EPR.
-Proof. unfold EPR. rewrite Mmult_adjoint, adjoint_involutive. reflexivity. Qed.
-
-Lemma EPR_idem : EPR × EPR = EPR.
-Proof.
-  unfold EPR. rewrite Mmult_assoc, <- (Mmult_assoc (∣Φ+⟩ †)), BellComplete.EPR_inner.
-  rewrite Mmult_1_l; auto with wf_db.
-Qed.
-
-Lemma EPR_fix : EPR × ∣Φ+⟩ = ∣Φ+⟩.
-Proof.
-  unfold EPR. rewrite Mmult_assoc, BellComplete.EPR_inner, Mmult_1_r;
-    auto with wf_db.
-Qed.
-
 (** The two Bell pairs of the reference block, as one projector. *)
 Definition EE : Square (2 ^ 4) := EPR ⊗ EPR.
 
@@ -298,24 +267,6 @@ Proof.
 Qed.
 
 (* ---- The single-qubit projector algebra, from BellComplete ----------- *)
-
-Lemma Pi_herm : forall b, (Pi b) † = Pi b.
-Proof.
-  intros b; unfold Pi; destruct (Nat.eqb b 0%nat);
-    [apply BellComplete.braket0_herm | apply BellComplete.braket1_herm].
-Qed.
-
-Lemma Pi_same : forall b, Pi b × Pi b = Pi b.
-Proof.
-  intros b; unfold Pi; destruct (Nat.eqb b 0%nat);
-    [apply BellComplete.braket00 | apply BellComplete.braket11].
-Qed.
-
-Lemma Pi_01 : Pi 0 × Pi 1 = Zero.
-Proof. unfold Pi; cbn; apply BellComplete.braket01. Qed.
-
-Lemma Pi_10 : Pi 1 × Pi 0 = Zero.
-Proof. unfold Pi; cbn; apply BellComplete.braket10. Qed.
 
 (* ---- G: "Bob measures v, and the block is in Frame v" ---------------- *)
 
@@ -451,38 +402,6 @@ Qed.
     the arithmetic under it is here.  "Hermitian and idempotent" is exactly
     "orthogonal projector", and such a matrix is an effect: PSD because it
     equals M M†, and below I because I - M is again hermitian idempotent. *)
-
-Lemma lowner_refl : forall n (M : Square n), M ⊑ M.
-Proof.
-  intros n M. unfold lowner, positive_semidefinite. intros z Hz.
-  replace (M .+ (- C1) .* M) with (@Zero n n) by lma.
-  rewrite Mmult_0_r, Mmult_0_l. cbn. lra.
-Qed.
-
-Lemma herm_idem_psd : forall n (M : Square n),
-    M † = M -> M × M = M -> positive_semidefinite M.
-Proof.
-  intros n M Hh Hi.
-  assert (E : M = M × M †) by (rewrite Hh, Hi; reflexivity).
-  rewrite E at 1. apply positive_semidefinite_AAadjoint.
-Qed.
-
-Lemma compl_herm : forall n (M : Square n),
-    M † = M -> (I n .+ (- C1) .* M) † = I n .+ (- C1) .* M.
-Proof.
-  intros n M Hh.
-  rewrite Mplus_adjoint, Mscale_adj, id_adjoint_eq, Hh.
-  assert (Hc : Cconj (- C1) = - C1) by lca. rewrite Hc. reflexivity.
-Qed.
-
-Lemma compl_idem : forall n (M : Square n),
-    WF_Matrix M -> M × M = M ->
-    (I n .+ (- C1) .* M) × (I n .+ (- C1) .* M) = I n .+ (- C1) .* M.
-Proof.
-  intros n M HW Hi.
-  rewrite Mmult_plus_distr_l, !Mmult_plus_distr_r.
-  Msimpl. rewrite Mscale_mult_dist_l, Mscale_mult_dist_r, Hi, Mscale_assoc. lma.
-Qed.
 
 (** The padded block operator every constant assertion of the case study
     denotes.  The I's are on the LEFT here, because A and B are qubits 0
@@ -643,7 +562,6 @@ Proof.
     [ rewrite BellComplete.braket00 | rewrite BellComplete.braket11 ];
     reflexivity.
 Qed.
-
 
 (** Bob's two unitary layers as ONE matrix.  Naming the product is what
     makes the chain literally a [W† M W] sandwich, so the projector algebra
