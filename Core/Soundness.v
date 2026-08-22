@@ -33,6 +33,101 @@ Section Soundness.
   Local Arguments wp_meas : simpl never.
   Local Arguments total_degree : simpl never.
 
+  (** ** Definitions and plumbing.
+      The row embeddings [lrow_prog]/[krow_prog] (a D-row leaf runs as
+      D;ε_K;↓, a K-row leaf as ↓;K;↓), their bookkeeping lemmas, and the
+      induction principle used by the assembly.  Everything below is the
+      per-rule soundness lemmas and Theorem 4.1. **)
+
+  Definition lrow_prog (d : lrow) : program :=
+    row_map (fun D => phase (r_more D) nil terminated) d.
+
+  Definition krow_prog (k : krow) : program :=
+    row_map (fun K => advance r_done K terminated) k.
+
+  (** [lrow_prog d] is exactly a program whose leaves are communication-free
+      and still owe the blocks of [d]. *)
+  Lemma lrow_prog_blocks : forall d, prog_blocks (lrow_prog d) = d.
+  Proof. intro d; apply prog_blocks_map; reflexivity. Qed.
+
+  Lemma lrow_prog_lseq : forall d, prog_lseq (lrow_prog d) = lseq d.
+  Proof. intro d; unfold prog_lseq; rewrite lrow_prog_blocks; reflexivity. Qed.
+
+  Lemma lrow_prog_shape : forall d, dshape (lrow_prog d).
+  Proof. intro d; apply row_all_map; intro D; right; eexists; reflexivity. Qed.
+
+  (** Par-Disjoint-MP: interference freedom (paper Lemma 1, mechanised as
+      [denote_comm]) normalises every interleaving of the row to its
+      displayed sequentialisation [lseq d], so the terminal collapse of ANY
+      run is the one the premise reasons about — [prog_adequacy] — and
+      [denote_sound] then reads off the degree. *)
+  Lemma krow_prog_kprog : forall k, krow_prog k = kprog k.
+  Proof. reflexivity. Qed.
+
+  (** Comm-Select-MP: one rendezvous c!e ⋈ c?x behaves as x := e, and
+      same-phase independence commutes the selected pair to the front
+      ([comm_reorder]).  No progress assumption is needed: the run of the
+      residual phase is BUILT from the given run by deleting the selected
+      pair, rather than assumed to exist. *)
+  Fixpoint derivable_ind'
+      (Pr : assertion dim -> program -> assertion dim -> Prop)
+      (Hpc : forall Q0 Q1 Q2 Q3 P d k t,
+          cut P = (d, k, t) -> wf_program P ->
+          wf_assertion Σ Q2 -> wf_assertion Σ Q3 ->
+          dloc Σ Q0 d Q1 ->
+          Σ ⊢ₖ {{ Q1 }} k {{ Q2 }} ->
+          Σ ⊢ₚ {{ Q2 }} t {{ Q3 }} -> Pr Q2 t Q3 ->
+          Pr Q0 P Q3)
+      (Hdn : forall Q P, prog_terminated P -> Pr Q P Q)
+      (Hba : forall phi B P fam,
+          Forall (fun Api => Σ ⊢ₚ {{ mk_assertion phi (fst Api) }} P
+                                 {{ mk_assertion (snd Api) B }}) fam ->
+          Forall (fun Api => Pr (mk_assertion phi (fst Api)) P
+                                (mk_assertion (snd Api) B)) fam ->
+          ForallOrdPairs (exclusive Σ) (map snd fam) ->
+          Pr (mk_assertion phi (qsum (map fst fam))) P
+             (mk_assertion (fdisj (map snd fam)) B))
+      (Hax : forall Q R P y v,
+          ~ In y (program_cvar P) ->
+          Σ ⊢ₚ {{ Q }} P {{ R }} -> Pr Q P R ->
+          Pr (assertion_subst Q y (e_val v)) P (assertion_subst R y (e_val v)))
+      (Hcq : forall Q Q' R R' P,
+          Q' ⊨[Σ] Q -> Σ ⊢ₚ {{ Q }} P {{ R }} -> Pr Q P R ->
+          R ⊨[Σ] R' -> wf_assertion Σ R' -> Pr Q' P R')
+      (Q : assertion dim) (P : program) (R : assertion dim)
+      (d : Σ ⊢ₚ {{ Q }} P {{ R }}) {struct d} : Pr Q P R :=
+    let rec := derivable_ind' Pr Hpc Hdn Hba Hax Hcq in
+    match d with
+    | rule_par_comp _ Q0 Q1 Q2 Q3 P0 d0 k0 t0 h1 h2 hw2 hw3 hd hk dt =>
+        Hpc Q0 Q1 Q2 Q3 P0 d0 k0 t0 h1 h2 hw2 hw3 hd hk dt (rec _ _ _ dt)
+    | rule_done _ Q0 P0 h => Hdn Q0 P0 h
+    | rule_branch_accum _ phi B P0 fam df hex =>
+        Hba phi B P0 fam df
+            ((fix go (l : list (qpred dim * formula))
+                  (h : Forall (fun Api =>
+                         Σ ⊢ₚ {{ mk_assertion phi (fst Api) }} P0
+                             {{ mk_assertion (snd Api) B }}) l)
+               {struct h}
+               : Forall (fun Api =>
+                   Pr (mk_assertion phi (fst Api)) P0
+                      (mk_assertion (snd Api) B)) l :=
+                match h in Forall _ l0
+                      return Forall (fun Api =>
+                               Pr (mk_assertion phi (fst Api)) P0
+                                  (mk_assertion (snd Api) B)) l0 with
+                | Forall_nil _ => Forall_nil _
+                | Forall_cons x0 hx hl =>
+                    Forall_cons x0 (rec _ _ _ hx) (go _ hl)
+                end) fam df)
+            hex
+    | rule_aux_subst _ Q0 R0 P0 y v h d' =>
+        Hax Q0 R0 P0 y v h d' (rec _ _ _ d')
+    | rule_conseq_d _ Q0 Q' R0 R' P0 h1 d' h2 h3 =>
+        Hcq Q0 Q' R0 R' P0 h1 d' (rec _ _ _ d') h2 h3
+    end.
+
+  (** ** Theorem 4.1 (Soundness of the proof system). *)
+
   (** ** 1. Conseq  ** **)
   Lemma conseq_sound :
     wf_interp Σ ->
@@ -73,28 +168,6 @@ Section Soundness.
          [dloc] and [⊢ₖ] are about rows, which are not programs, so their
          validity is stated through the embeddings: a D-row leaf runs as
          D;ε_K;↓ and a K-row leaf as ↓;K;↓. *)
-  Definition lrow_prog (d : lrow) : program :=
-    row_map (fun D => phase (r_more D) nil terminated) d.
-
-  Definition krow_prog (k : krow) : program :=
-    row_map (fun K => advance r_done K terminated) k.
-
-  (** [lrow_prog d] is exactly a program whose leaves are communication-free
-      and still owe the blocks of [d]. *)
-  Lemma lrow_prog_blocks : forall d, prog_blocks (lrow_prog d) = d.
-  Proof. intro d; apply prog_blocks_map; reflexivity. Qed.
-
-  Lemma lrow_prog_lseq : forall d, prog_lseq (lrow_prog d) = lseq d.
-  Proof. intro d; unfold prog_lseq; rewrite lrow_prog_blocks; reflexivity. Qed.
-
-  Lemma lrow_prog_shape : forall d, dshape (lrow_prog d).
-  Proof. intro d; apply row_all_map; intro D; right; eexists; reflexivity. Qed.
-
-  (** Par-Disjoint-MP: interference freedom (paper Lemma 1, mechanised as
-      [denote_comm]) normalises every interleaving of the row to its
-      displayed sequentialisation [lseq d], so the terminal collapse of ANY
-      run is the one the premise reasons about — [prog_adequacy] — and
-      [denote_sound] then reads off the degree. *)
   Lemma par_disjoint_sound :
     wf_interp Σ ->
     forall (Q R : assertion dim) (d : lrow),
@@ -129,14 +202,6 @@ Section Soundness.
 
   (** [krow_prog] is SoundnessFacts' [kprog]; the latter had to be stated
       upstream, where [krow_prog] does not exist yet. *)
-  Lemma krow_prog_kprog : forall k, krow_prog k = kprog k.
-  Proof. reflexivity. Qed.
-
-  (** Comm-Select-MP: one rendezvous c!e ⋈ c?x behaves as x := e, and
-      same-phase independence commutes the selected pair to the front
-      ([comm_reorder]).  No progress assumption is needed: the run of the
-      residual phase is BUILT from the given run by deleting the selected
-      pair, rather than assumed to exist. *)
   Lemma comm_select_sound :
     forall (Q R : assertion dim) (k kmid k' : krow)
            (c : chan) (e : expr) (x : var),
@@ -408,64 +473,6 @@ Section Soundness.
          sub-derivations sit inside a [Forall], a nested occurrence.  Same
          principle, recursion written out, with an inner fix over the
          family. *)
-  Fixpoint derivable_ind'
-      (Pr : assertion dim -> program -> assertion dim -> Prop)
-      (Hpc : forall Q0 Q1 Q2 Q3 P d k t,
-          cut P = (d, k, t) -> wf_program P ->
-          wf_assertion Σ Q2 -> wf_assertion Σ Q3 ->
-          dloc Σ Q0 d Q1 ->
-          Σ ⊢ₖ {{ Q1 }} k {{ Q2 }} ->
-          Σ ⊢ₚ {{ Q2 }} t {{ Q3 }} -> Pr Q2 t Q3 ->
-          Pr Q0 P Q3)
-      (Hdn : forall Q P, prog_terminated P -> Pr Q P Q)
-      (Hba : forall phi B P fam,
-          Forall (fun Api => Σ ⊢ₚ {{ mk_assertion phi (fst Api) }} P
-                                 {{ mk_assertion (snd Api) B }}) fam ->
-          Forall (fun Api => Pr (mk_assertion phi (fst Api)) P
-                                (mk_assertion (snd Api) B)) fam ->
-          ForallOrdPairs (exclusive Σ) (map snd fam) ->
-          Pr (mk_assertion phi (qsum (map fst fam))) P
-             (mk_assertion (fdisj (map snd fam)) B))
-      (Hax : forall Q R P y v,
-          ~ In y (program_cvar P) ->
-          Σ ⊢ₚ {{ Q }} P {{ R }} -> Pr Q P R ->
-          Pr (assertion_subst Q y (e_val v)) P (assertion_subst R y (e_val v)))
-      (Hcq : forall Q Q' R R' P,
-          Q' ⊨[Σ] Q -> Σ ⊢ₚ {{ Q }} P {{ R }} -> Pr Q P R ->
-          R ⊨[Σ] R' -> wf_assertion Σ R' -> Pr Q' P R')
-      (Q : assertion dim) (P : program) (R : assertion dim)
-      (d : Σ ⊢ₚ {{ Q }} P {{ R }}) {struct d} : Pr Q P R :=
-    let rec := derivable_ind' Pr Hpc Hdn Hba Hax Hcq in
-    match d with
-    | rule_par_comp _ Q0 Q1 Q2 Q3 P0 d0 k0 t0 h1 h2 hw2 hw3 hd hk dt =>
-        Hpc Q0 Q1 Q2 Q3 P0 d0 k0 t0 h1 h2 hw2 hw3 hd hk dt (rec _ _ _ dt)
-    | rule_done _ Q0 P0 h => Hdn Q0 P0 h
-    | rule_branch_accum _ phi B P0 fam df hex =>
-        Hba phi B P0 fam df
-            ((fix go (l : list (qpred dim * formula))
-                  (h : Forall (fun Api =>
-                         Σ ⊢ₚ {{ mk_assertion phi (fst Api) }} P0
-                             {{ mk_assertion (snd Api) B }}) l)
-               {struct h}
-               : Forall (fun Api =>
-                   Pr (mk_assertion phi (fst Api)) P0
-                      (mk_assertion (snd Api) B)) l :=
-                match h in Forall _ l0
-                      return Forall (fun Api =>
-                               Pr (mk_assertion phi (fst Api)) P0
-                                  (mk_assertion (snd Api) B)) l0 with
-                | Forall_nil _ => Forall_nil _
-                | Forall_cons x0 hx hl =>
-                    Forall_cons x0 (rec _ _ _ hx) (go _ hl)
-                end) fam df)
-            hex
-    | rule_aux_subst _ Q0 R0 P0 y v h d' =>
-        Hax Q0 R0 P0 y v h d' (rec _ _ _ d')
-    | rule_conseq_d _ Q0 Q' R0 R' P0 h1 d' h2 h3 =>
-        Hcq Q0 Q' R0 R' P0 h1 d' (rec _ _ _ d') h2 h3
-    end.
-
-  (** ** Theorem 4.1 (Soundness of the proof system). *)
   Theorem soundness :
     wf_interp Σ ->
     forall (Q R : assertion dim) (P : program),

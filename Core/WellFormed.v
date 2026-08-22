@@ -213,6 +213,50 @@ Definition wf_phase_independence (P : program) : Prop :=
 
 (** Both phase footprints factor through [phase_actions]: flattening the
     blocks first and then reading each action is the same traversal. **)
+(** ** Well-formedness predicate and the local-row relation.
+    These are the file's title concepts; the helper lemmas below support
+    Theorem [wf_disj_footprints] at the end. **)
+(** A well-formed LOCC distributed program (Definition 2.1). **)
+Definition wf_program (P : program) : Prop :=
+  wf_ownership P /\ wf_channels P /\ wf_phase_aligned P /\ wf_phase_independence P.
+
+(** ** Theorem 2.1 — well-formedness implies disjoint local footprints ***
+
+    The paper cuts one communication-free local block Dᵢ out of each process
+    Sᵢ — the padded case being skip — and claims DisjMP({Dᵢ}).  An [lblock]
+    holds no endpoints by construction, so only "occurring in Sᵢ" is left to
+    state.  The chosen blocks form an lrow of the SAME SHAPE as the program,
+    which is what [local_row] records. **)
+
+(** D is the local block of one of p's phases. **)
+(** D is the local block of one of p's phases. **)
+Fixpoint block_in (D : lblock) (p : process) : Prop :=
+  match p with
+  | terminated   => False
+  | phase R _ p' => R = r_more D \/ block_in D p'
+  end.
+
+(** What one leaf may contribute to the row: a block of its own, or skip. **)
+(** What one leaf may contribute to the row: a block of its own, or skip. **)
+Definition leaf_block (T : process) (D : lblock) : Prop :=
+  D = l_skip \/ block_in D T.
+
+(** [local_row P d]: d is one such block per leaf — the D-row of
+    Par-Comp-MP, shaped like P. **)
+(** [local_row P d]: d is one such block per leaf — the D-row of
+    Par-Comp-MP, shaped like P. **)
+Inductive local_row : program -> lrow -> Prop :=
+| lrow_leaf : forall T D,
+    leaf_block T D ->
+    local_row (leaf T) (leaf D)
+| lrow_par : forall P1 P2 d1 d2,
+    local_row P1 d1 ->
+    local_row P2 d2 ->
+    local_row (par P1 P2) (par d1 d2).
+
+(** Footprint monotonicity: a phase's block touches only what its process
+    touches. **)
+
 Lemma flat_map_concat_flat : forall {A B} (f : A -> list B) (l : list (list A)),
     flat_map (fun x => flat_map f x) l = flat_map f (concat l).
 Proof.
@@ -325,42 +369,6 @@ Proof.
     rewrite E2 in E1; discriminate.
 Qed.
 
-(** A well-formed LOCC distributed program (Definition 2.1). **)
-Definition wf_program (P : program) : Prop :=
-  wf_ownership P /\ wf_channels P /\ wf_phase_aligned P /\ wf_phase_independence P.
-
-(** ** Theorem 2.1 — well-formedness implies disjoint local footprints ***
-
-    The paper cuts one communication-free local block Dᵢ out of each process
-    Sᵢ — the padded case being skip — and claims DisjMP({Dᵢ}).  An [lblock]
-    holds no endpoints by construction, so only "occurring in Sᵢ" is left to
-    state.  The chosen blocks form an lrow of the SAME SHAPE as the program,
-    which is what [local_row] records. **)
-
-(** D is the local block of one of p's phases. **)
-Fixpoint block_in (D : lblock) (p : process) : Prop :=
-  match p with
-  | terminated   => False
-  | phase R _ p' => R = r_more D \/ block_in D p'
-  end.
-
-(** What one leaf may contribute to the row: a block of its own, or skip. **)
-Definition leaf_block (T : process) (D : lblock) : Prop :=
-  D = l_skip \/ block_in D T.
-
-(** [local_row P d]: d is one such block per leaf — the D-row of
-    Par-Comp-MP, shaped like P. **)
-Inductive local_row : program -> lrow -> Prop :=
-| lrow_leaf : forall T D,
-    leaf_block T D ->
-    local_row (leaf T) (leaf D)
-| lrow_par : forall P1 P2 d1 d2,
-    local_row P1 d1 ->
-    local_row P2 d2 ->
-    local_row (par P1 P2) (par d1 d2).
-
-(** Footprint monotonicity: a phase's block touches only what its process
-    touches. **)
 Lemma block_in_change : forall D p,
     block_in D p -> incl (lblock_change D) (process_change p).
 Proof.
