@@ -110,7 +110,7 @@ Definition eswap_pre : assertion 4 :=
      quantum_part   := q_op (fun _ => Some (SwapComplete.Psi0 × SwapComplete.Psi0†)) nil |}.
 Definition eswap_post : assertion 4 :=
   {| classical_part := f_bexp b_true;
-     quantum_part   := q_op (fun _ => Some (SwapComplete.EPR ⊗ I 2 ⊗ I 2)) nil |}.
+     quantum_part   := q_op (fun _ => Some (SharedKernel.EPR ⊗ I 2 ⊗ I 2)) nil |}.
 
 Definition es_uu (U : usym) (qs : list qvar) : Square (2 ^ 4) :=
   match U, qs with
@@ -250,19 +250,19 @@ Qed.
     computed here. *)
 
 (* SwapComplete's WF hints are not in scope without [Import]. *)
-#[local] Hint Resolve SwapComplete.WF_Corr SwapComplete.WF_EPR
+#[local] Hint Resolve SwapComplete.WF_Corr SharedKernel.WF_EPR
                       SwapComplete.WF_ZX  SwapComplete.WF_Psi0 : wf_db.
 
 Lemma lowner_refl : forall n (M : Square n), M ⊑ M.
-Proof. exact @SwapComplete.lowner_refl. Qed.
+Proof. exact @SharedKernel.lowner_refl. Qed.
 
 Lemma herm_idem_effect : forall dim (M : Square (2 ^ dim)),
     WF_Matrix M -> M† = M -> M × M = M -> is_effect (dim := dim) M.
 Proof.
   intros dim M HW Hh Hi.
-  split; [ apply SwapComplete.herm_idem_psd; assumption |].
-  unfold lowner. apply SwapComplete.herm_idem_psd;
-    [ apply SwapComplete.compl_herm | apply SwapComplete.compl_idem ];
+  split; [ apply SharedKernel.herm_idem_psd; assumption |].
+  unfold lowner. apply SharedKernel.herm_idem_psd;
+    [ apply SharedKernel.compl_herm | apply SharedKernel.compl_idem ];
     assumption.
 Qed.
 
@@ -285,11 +285,11 @@ Proof.
                SwapComplete.Corr_idem.
 Qed.
 
-Lemma is_effect_epr : is_effect (dim := 4) (SwapComplete.EPR ⊗ I 2 ⊗ I 2).
+Lemma is_effect_epr : is_effect (dim := 4) (SharedKernel.EPR ⊗ I 2 ⊗ I 2).
 Proof.
   apply is_effect_ab;
-    auto using SwapComplete.WF_EPR, SwapComplete.EPR_herm,
-               SwapComplete.EPR_idem.
+    auto using SharedKernel.WF_EPR, SharedKernel.EPR_herm,
+               SharedKernel.EPR_idem.
 Qed.
 
 (** ** The assertions ************************************************
@@ -311,7 +311,7 @@ Definition qCorrX (a : var) : qpred 4 :=
        [e_var a].
 
 Definition qAB : qpred 4 :=
-  q_op (fun _ => Some (SwapComplete.EPR ⊗ I 2 ⊗ I 2)) nil.
+  q_op (fun _ => Some (SharedKernel.EPR ⊗ I 2 ⊗ I 2)) nil.
 
 (* Shaped so that (Axiom-Meas) applies on the nose: its postcondition must
    be literally (phi /\ x = y), so after the two rendezvous substitutions
