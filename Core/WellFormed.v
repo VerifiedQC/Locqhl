@@ -268,32 +268,12 @@ Proof.
       * right; exact Hin.
 Qed.
 
-Lemma filter_chan_nonnil_in : forall (c : chan) (l : list caction),
-    filter (fun a => Nat.eqb (caction_chan a) c) l <> [] ->
-    In c (map caction_chan l).
-Proof.
-  intros c l H.
-  destruct (filter (fun a => Nat.eqb (caction_chan a) c) l) as [| a rest] eqn:Ef;
-    [exfalso; exact (H eq_refl) |].
-  assert (Hain : In a (filter (fun a0 => Nat.eqb (caction_chan a0) c) l))
-    by (rewrite Ef; left; reflexivity).
-  apply filter_In in Hain as [HinL Hchan].
-  apply Nat.eqb_eq in Hchan. rewrite <- Hchan. apply in_map, HinL.
-Qed.
-
 Lemma filter_length_split : forall {A} (f : A -> bool) (l : list A),
     length l = length (filter f l) + length (filter (fun x => negb (f x)) l).
 Proof.
   induction l as [| a l IH]; simpl; [reflexivity |].
   destruct (f a); simpl; rewrite IH;
     [reflexivity | symmetry; apply Nat.add_succ_r].
-Qed.
-
-Lemma filter_filter_and : forall {A} (f g : A -> bool) (l : list A),
-    filter f (filter g l) = filter (fun x => andb (g x) (f x)) l.
-Proof.
-  induction l as [| a l IH]; simpl; [reflexivity |].
-  destruct (g a); simpl; [destruct (f a) | ]; rewrite IH; reflexivity.
 Qed.
 
 Lemma existsb_eqb_true_iff : forall (c : chan) (l : list chan),
@@ -303,26 +283,6 @@ Proof.
   - split; [discriminate | intros []].
   - rewrite Bool.orb_true_iff, IH, Nat.eqb_eq.
     split; (intros [H | H]; [left | right]); auto.
-Qed.
-
-(** A leaf's party count only depends on whether it mentions c at all. **)
-Lemma parties_leaf_eq : forall (T1 T2 : process) (c : chan),
-    (In c (process_chan T1) <-> In c (process_chan T2)) ->
-    parties (leaf T1) c = parties (leaf T2) c.
-Proof.
-  intros T1 T2 c Hiff. unfold parties; cbn [row_parties].
-  match goal with
-  | |- (if ?b1 then _ else _) = (if ?b2 then _ else _) =>
-      destruct b1 eqn:E1; destruct b2 eqn:E2
-  end; try reflexivity; exfalso.
-  - apply (proj1 (existsb_eqb_true_iff c (process_chan T1))) in E1.
-    apply Hiff in E1.
-    apply (proj2 (existsb_eqb_true_iff c (process_chan T2))) in E1.
-    rewrite E1 in E2; discriminate.
-  - apply (proj1 (existsb_eqb_true_iff c (process_chan T2))) in E2.
-    apply Hiff in E2.
-    apply (proj2 (existsb_eqb_true_iff c (process_chan T1))) in E2.
-    rewrite E2 in E1; discriminate.
 Qed.
 
 (** A well-formed LOCC distributed program (Definition 2.1). **)
