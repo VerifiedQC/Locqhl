@@ -5,7 +5,7 @@ The source and saved Notebook are versioned in `tools/verilocq/`; local environm
 
 [Quickstart.ipynb](Quickstart.ipynb) defines the protocols and checks their Hoare triples.
 Every protocol is defined in full in its Notebook cell, followed by explicit specifications and verification calls.
-The Notebook includes saved outputs and uses plain text reports throughout. Z3 is an internal backend dependency.
+The Notebook is stored without outputs; run it (or `scripts/execute_notebook.py`) to see the plain text reports. Z3 is an internal backend dependency.
 
 ## Hoare triples
 
@@ -309,4 +309,4 @@ The trusted base includes this Python implementation, SymPy, Z3 and Python itsel
 - `tests/`: positive cases, deliberate mutations, input validation and review regressions.
 - `scripts/build_notebook.py`: regenerate the English walkthrough and clear old outputs.
 - `scripts/execute_notebook.py`: execute it and save outputs.
-- `REVIEW.md`: independent review findings and their resolution.
+- `REVIEW.md`: summary of independent review findings, fixes and trust scope.
