@@ -1,0 +1,13 @@
+# Local environments and Notebook runtime.
+/.venv/
+/.runtime/
+/.Quickstart.executed.ipynb
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+.coverage
+build/
+dist/
+.DS_Store

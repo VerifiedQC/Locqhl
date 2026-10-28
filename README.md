@@ -35,6 +35,24 @@ Requires the Rocq Prover (tested with **9.1**). The vendored
 `third_party/QuantumLib` is compiled as part of the project; nothing else is
 needed.
 
+## VeriLocQ automated verifier
+
+[VeriLocQ](tools/verilocq/README.md) provides a Python frontend for defining
+LOCC programs, checking annotated Hoare triples, and inspecting proof steps.
+The [Quickstart Notebook](tools/verilocq/Quickstart.ipynb) defines all six
+examples inline, including a failing RSP variant and distillation bounds.
+
+```sh
+cd tools/verilocq
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[notebook]"
+.venv/bin/python -m verilocq --case rsp
+```
+
+VeriLocQ uses SMT and exact symbolic matrix/indexed-operator checks. It is a
+separate implementation alongside the Rocq development; it does not emit Rocq
+certificates or inherit the mechanization's machine-checked soundness theorem.
+
 ## Layout (`Core/`, in dependency order)
 
 | File | Contents |
