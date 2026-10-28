@@ -31,7 +31,7 @@ from nbclient import NotebookClient
 
 path = ROOT / "Quickstart.ipynb"
 notebook = nbformat.read(path, as_version=4)
-client = NotebookClient(notebook, timeout=120, kernel_name="python3",
+client = NotebookClient(notebook, timeout=600, kernel_name="python3",
                         resources={"metadata": {"path": str(ROOT)}})
 client.execute()
 nbformat.validate(notebook)

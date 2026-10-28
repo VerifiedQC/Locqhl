@@ -16,9 +16,36 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  discover:
+    name: Discover regression suites
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    outputs:
+      suites: ${{ steps.collect.outputs.suites }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: collect
+        name: Find all test files
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import re
+          from pathlib import Path
+
+          suites = sorted({path.name for path in Path('tools/verilocq/tests').rglob('test*.py')})
+          if not suites or any(not re.fullmatch(r'test[A-Za-z0-9_]*\.py', name) for name in suites):
+              raise SystemExit('Expected at least one test file with a valid module name')
+          print('suites=' + json.dumps(suites, separators=(',', ':')))
+          PY
+
+  tests:
+    name: Tests (${{ matrix.suite }})
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.discover.outputs.suites) }}
     defaults:
       run:
         working-directory: tools/verilocq
@@ -31,7 +58,45 @@ jobs:
           cache-dependency-path: tools/verilocq/pyproject.toml
       - name: Install verifier and Notebook dependencies
         run: python -m pip install -e ".[notebook]"
-      - name: Run verification regressions
-        run: python -m unittest discover -s tests -v
+      - name: Run regression suite
+        env:
+          VERILOCQ_TEST_SUITE: ${{ matrix.suite }}
+        run: python -m unittest discover -s tests -p "$VERILOCQ_TEST_SUITE" -v
+
+  notebook:
+    name: Execute Quickstart
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: tools/verilocq
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tools/verilocq/pyproject.toml
+      - name: Install verifier and Notebook dependencies
+        run: python -m pip install -e ".[notebook]"
       - name: Execute Quickstart
         run: python scripts/execute_notebook.py
+
+  verify:
+    name: verify
+    if: ${{ always() }}
+    needs: [discover, tests, notebook]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every VeriLocQ job to pass
+        env:
+          DISCOVER_RESULT: ${{ needs.discover.result }}
+          TEST_RESULT: ${{ needs.tests.result }}
+          NOTEBOOK_RESULT: ${{ needs.notebook.result }}
+        run: |
+          for result in "$DISCOVER_RESULT" "$TEST_RESULT" "$NOTEBOOK_RESULT"; do
+            if [ "$result" != success ]; then
+              echo "VeriLocQ job did not pass: $result" >&2
+              exit 1
+            fi
+          done
