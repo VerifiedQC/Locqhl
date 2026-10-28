@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "verilocq"
+version = "0.8.0"
+description = "Proof construction and exact checking for LocQHL protocols"
+requires-python = ">=3.11"
+dependencies = ["sympy>=1.13,<2", "z3-solver>=4.13,<6"]
+
+[project.optional-dependencies]
+notebook = ["nbformat>=5,<6", "nbclient>=0.10,<1", "ipykernel>=6,<8"]
+
+[project.scripts]
+verilocq = "verilocq.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["verilocq*"]
