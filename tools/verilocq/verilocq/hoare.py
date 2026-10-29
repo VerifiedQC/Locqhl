@@ -917,7 +917,7 @@ class Evidence:
     def explain(self,matrices=False):
         self.check()
         labels={}
-        definitions=list(self.definitions)
+        definitions={}
         def quantum(q):
             key=q.key()
             if q.kind=="identity":
@@ -939,7 +939,7 @@ class Evidence:
                 op,target=a
                 suffix=f", outcome={format_expression(op.outcome)}" if op.outcome is not None else ""
                 text=f"F_{op.name}[{format_expression(op.at)}{suffix}]({quantum(target)})"
-            definitions.append(f"{name} = {text}")
+            definitions[name]=text
             return name
         def assertion(a):
             return f"{{ {format_expression(a.classical)} ; {quantum(a.quantum)} }}"
@@ -964,7 +964,11 @@ class Evidence:
             if step.rule=="Distributed-tot":
                 data=step.data[0]
                 lines.append(f"  rank t = {format_expression(data.rank)}; fresh xi = {format_expression(data.old_rank)}")
-        lines.extend(("","Intermediate predicates:",*definitions))
+        ordered_definitions=[f"{name} = {text}" for name,text in
+                             sorted(definitions.items(),key=lambda item:int(item[0][1:]))]
+        lines=["Intermediate predicates (local to this check):",
+               "W labels name the quantum predicates used below.",
+               *self.definitions,*ordered_definitions,"","Hoare rule derivation:",*lines]
         if self.checker.quantum.trace:
             lines.extend(("","Quantum side conditions:",*dict.fromkeys(self.checker.quantum.trace)))
         if matrices:

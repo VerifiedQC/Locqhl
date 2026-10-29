@@ -129,8 +129,6 @@ cells = [
     '''),
     md(r'''
     ## Teleportation
-
-    `R` is a read-only reference; preserving its Bell pair specifies transfer of an arbitrary input state.
     '''),
     code(r'''
     tele = program("""
@@ -267,8 +265,6 @@ cells = [
     '''),
     md(r'''
     ## Non-local CNOT
-
-    Read-only references `RC,RT` specify the complete two-qubit channel.
     '''),
     code(r'''
     cnot = program("""
@@ -465,7 +461,7 @@ cells = [
     md(r'''
     ## PhaseChoice
 
-    The scheduler chooses 0 or 1; the output predicate records that choice in `s`.
+    The scheduler chooses 0 or 1. The output predicate records that choice in `s`.
     '''),
     code(r'''
     phase_choice = program("""
