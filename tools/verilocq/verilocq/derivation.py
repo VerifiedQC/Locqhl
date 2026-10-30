@@ -152,6 +152,7 @@ class WPNode:
 def build_wp(program, block, post):
     fresh = count()
     forbidden = set(program.varmap) | {p.name for p in getattr(program, "parameters", ())}
+    forbidden.update(p.name for p in getattr(program, "state_parameters", ()))
 
     def build(commands, tail, nesting=0):
         if nesting > 256:
@@ -212,6 +213,8 @@ class LocalEvidence:
             lines.append("The classical precondition has no satisfying input under the declared domains: the triple is vacuous. No operator evaluation is needed.")
         if self.wp.rule == "Target":
             lines[-2] = lines[-2].replace("W0", "Q")
+        if self.sample is not None and "state_parameters" in self.sample:
+            lines.append(f"Exact counterexample parameters: {self.sample['state_parameters']}")
         if matrices and self.sample is not None:
             sample = self.sample
             lines.extend(["One recorded valuation from the checks completed so far; overall coverage depends on the obligation status:",

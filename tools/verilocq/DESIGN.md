@@ -25,6 +25,7 @@ Distillation uses the indexed proof kernel and retry-controller adapter describe
 The program itself is our typed Python AST: `Assign`, `Gate`, `Measure`, `If`, `Process`, and so on.
 Only classical expressions and conditions are Z3 expressions. Quantum predicates are exact SymPy
 matrices selected by finite classical cases, with declared symbolic unit phases when applicable.
+Declared normalized state parameters also remain symbolic.
 There is no translation of an entire quantum program into one Z3 theorem.
 
 For a loop-free block, construct an executable backward weakest-precondition tree:
@@ -45,7 +46,7 @@ calculation, and cross-checking the WP implementation. The two calculations sati
 An assertion's matrix is zero when its classical condition is false. The tool checks `pre <= wp` for every relevant classical input. Measurement paths are not normalized, so probability weights are retained.
 
 Z3 exhaustively enumerates relevant finite classical values and proves classical implications.
-It does not prove the quantum operator inequalities: exact Hermitian Schur complements check
+It does not prove the quantum operator inequalities: exact Hermitian projector identities and Schur complements check
 `wp - pre >= 0`. Variables are projected out only when backward data dependence shows that they
 cannot influence the check. No numerical eigenvalue tolerance can cause acceptance.
 Calculation budgets include a WP depth/nesting limit of 256; exceeding it yields `INCOMPLETE`,
@@ -61,6 +62,46 @@ derivation: fresh-outcome handling and accumulation are implemented as the displ
 In particular, intermediate W predicates are operator-valued assertions, not physical execution states.
 
 Classical variables and quantum registers have disjoint process ownership. Classical communication is synchronous. Reference qubits used by Choi specifications are read-only. Each matching pair is checked in one canonical process order, using the paper's independent-step commutation argument.
+
+### Arbitrary normalized input states
+
+`state psi;` declares a specification parameter corresponding to the Rocq hypotheses `psi : Vector 2`, `WF_Matrix psi` and `psi† * psi = I 1`.
+The predicate `rho(psi)[q]` denotes `psi * psi†` on register `q` and identity on other registers.
+The parameter is not a qubit, cannot be assigned or used in classical guards, and is retained in the typed program representation for a future Rocq exporter.
+
+Internally, `psi` is represented, up to global phase, by `cos(theta)|0> + z*sin(theta)|1>`, with an arbitrary real `theta` and a formal unit phase `z` satisfying `conjugate(z)=1/z`.
+This representation covers every normalized one-qubit projector, including both computational-basis states, without dividing by either amplitude.
+The angle and phase stay symbolic throughout successful verification.
+Exact Hermitian idempotence, `P†=P` and `P*P=P`, supplies a positivity certificate when a symbolic projector cannot be handled by a strictly positive Schur pivot.
+Effects with state parameters must also have finite entries for every parameter value.
+
+If a symbolic inequality cannot be decided, exact instantiated states may provide a counterexample.
+Passing any number of such instances never establishes verification, and an undecided inequality remains `INCOMPLETE` if no counterexample is found.
+Teleportation uses the same three-qubit `rho_psi tensor Bell` to `I tensor I tensor rho_psi` specification as `CaseStudies/Teleportation.v`.
+`state psi[2];` declares an arbitrary normalized joint vector on two qubits, corresponding to `psi : Vector 4` with the same well-formedness and normalization hypotheses.
+Its four complex amplitudes stay symbolic, with `sum_i a_i*conjugate(a_i)=1` as the only relation.
+Polynomial equalities are reduced modulo this normalization equation by exact Groebner reduction, without assuming any amplitude is nonzero or that the two qubits are separable.
+Non-local CNOT uses four protocol qubits and the current paper's `Bell[A,B] * rho(psi)[C,T]` to `CNOT[C,T] * rho(psi)[C,T]` specification.
+This follows the current paper rather than the older Choi-style specification in `CaseStudies/NonlocalCNOT.v`.
+
+### Correspondence with the current paper
+
+The case-study programs, specifications, invariant formulas and ranking functions were checked against the current `LOCQHL_PLDI27` sources.
+Omitted `else skip` branches, explicit `skip` commands, ASCII register names and bit-domain conjuncts already supplied by declarations do not change the programs or assertions.
+
+| Case | Paper source | Input and target | Ranking function |
+|---|---|---|---|
+| Teleportation | `example.tex`, `CSTele` and Appendix B.1 | arbitrary `psi[A1]` with Bell resource to `psi[B]` | `2-[dAz]-[dAx]` |
+| Entanglement swapping | `example.tex`, `CSSwap` and Appendix B.2 | two initial Bell pairs to `Bell[A,B]` | `2-[dCA]-[dCB]` |
+| Distillation | `example.tex`, `CSDistill` and Appendix B.3 | both first-acceptance effects to acceptance or acceptance with the retained Bell pair | `2*(n-kA)-[sentA]-[recvA]` |
+| Non-local CNOT | Appendix C.1 and `CSRCNOT` | arbitrary joint `psi[C,T]` with Bell resource to `CNOT[C,T]*psi[C,T]` | `2-[dA]-[dB]` |
+| Remote state preparation | Appendix C.2 and `CSRSP` | Bell resource to the equatorial state, with `0<=alpha<2*pi` preserved | `1-[d]` |
+| PhaseChoice | Appendix C.3 and `CSPhase` | Bell resource to `U(s)[B]*Bell[A,B]`, with the paper's exact `9/10` and `7/10` cases | `1-[a]` |
+
+Read-only phase-domain assertions are retained in the public specifications.
+Their Boolean domain consequences are checked by SMT under `0<=alpha<2*pi` and the positivity of pi before finite classical verification.
+The quantum backend checks every unit phase, covering the whole declared angle domain.
+It rejects narrower angle-dependent restrictions, which cannot be justified by treating the real angle and its unit-phase symbol independently.
 
 Supplemental order checks execute both complete message orders for the finite examples. The teleportation channel audit also enumerates all relevant initial classical values; it never silently fixes a relevant scratch bit.
 
@@ -122,7 +163,9 @@ This establishes first-acceptance precondition mass, not termination for every p
 
 The executable loop, fresh arrays and the two first-acceptance specifications agree with the paper.
 The generated distributed proof uses the paper's invariant `theta and kA<n` and its bound function.
-The frontend spelling `theta` with `K=0` outside the proof horizon denotes the same quantitative assertion.
+The Notebook explicitly writes `theta and kA<n`, matching the paper.
+For the classical controller audit, the frontend removes only that explicit horizon conjunct because `K=0` outside the horizon makes the two quantitative assertions equal.
+The replayed Hoare proof retains `theta and kA<n` at its invariant checkpoints.
 
 `verilocq/hoare.py` constructs and replays the local and distributed judgments. `Assign` substitutes
 into both assertion parts; `Unitary` constructs the source gate's predicate pullback; `Meas` introduces

@@ -71,6 +71,17 @@ class PhaseParameter:
 
 
 @dataclass(frozen=True)
+class StateParameter:
+    """An arbitrary normalized vector, used only in assertions."""
+    name: str
+    qubits: int = 1
+
+    def __post_init__(self):
+        if type(self.qubits) is not int or self.qubits not in (1, 2):
+            raise Unsupported("State parameters support one or two qubits")
+
+
+@dataclass(frozen=True)
 class GateFamily:
     name: str
     cases: tuple
@@ -139,6 +150,7 @@ class Program:
     references: tuple[str, ...] = ()
     parameters: tuple[PhaseParameter, ...] = ()
     gate_families: tuple[GateFamily, ...] = ()
+    state_parameters: tuple[StateParameter, ...] = ()
 
     @property
     def varmap(self):
@@ -253,6 +265,10 @@ class Program:
             raise Unsupported("Phase parameters must have distinct names, separate from finite variables")
         if any(p.owner not in owners for p in self.parameters):
             raise Unsupported("Every phase parameter needs a declared process owner")
+        state_names = [p.name for p in self.state_parameters]
+        if (len(state_names) != len(set(state_names))
+                or set(state_names) & (set(self.varmap) | set(parameter_names) | set(self.registers))):
+            raise Unsupported("State parameters must have distinct names, separate from variables, phases and qubits")
         family_names = [f.name for f in self.gate_families]
         if len(family_names) != len(set(family_names)) or set(family_names) & {"H", "X", "Z", "CNOT", "R"}:
             raise Unsupported("Gate family names must be distinct and may not replace primitive gates")

@@ -12,7 +12,7 @@ from html import escape
 import sympy as sp
 import z3
 
-from .quantum import Assertion, clean, embed, evaluate, gate_matrix, psd
+from .quantum import Assertion, clean, embed, evaluate, gate_matrix, psd, state_counterexample
 from .syntax import (Assign, Gate, If, Measure, Reset, Skip, Unsupported,
                      expr, live_before, names)
 from .derivation import build_wp, LocalEvidence, ImplicationEvidence, ProofPlan
@@ -177,13 +177,20 @@ def check_hoare(program, pre, block, post, name="Local Hoare triple",
             after = wp.evaluate(program, state, max_paths)
             difference = clean(after - before)
             decision = psd(difference)
+            parameter_witness = None
+            if decision is None:
+                parameter_witness = state_counterexample(difference, program)
+                if parameter_witness is not None:
+                    decision = False
             count += 1
             evidence.record(state, before, after, difference, decision)
+            if parameter_witness is not None:
+                evidence.sample["state_parameters"] = parameter_witness
             if decision is False:
                 return Obligation(name, "operator inequality", "FAILED", count,
                                   "The precondition does not guarantee this intermediate proof condition. "
                                   "The program or the supplied invariant may need to change.",
-                                  state, evidence=evidence)
+                                  dict(state, **(parameter_witness or {})), evidence=evidence)
             if decision is None:
                 return Obligation(name, "operator inequality", "INCOMPLETE", count,
                                   "Exact positivity could not be decided", state, evidence=evidence)

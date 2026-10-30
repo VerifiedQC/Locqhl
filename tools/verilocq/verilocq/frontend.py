@@ -17,7 +17,7 @@ from z3.z3util import get_vars
 
 from . import syntax as ir
 from .quantum import (Assertion, BELL, Effect, GATES, clean, embed, evaluate,
-                      gate_matrix, phase_symbol, projector)
+                      gate_matrix, phase_symbol, projector, state_projector)
 from .verifier import Report, check_implication, states, verify_distributed
 from .derivation import ProofPlan, ProofView
 
@@ -208,6 +208,49 @@ class _Cell:
     index: str
 
 
+def _classical_formula(source, backend):
+    """Keep the paper's read-only phase-domain assumptions in source assertions.
+
+    Only predicates decided by 0 <= alpha < 2*pi are eliminated. Conditions
+    selecting a smaller angle interval are unsupported, since the unit-phase
+    quantum backend does not relate such an interval to its complex symbol.
+    """
+    symbols = {v.name: v.symbol for v in backend.variables}
+    parameters = getattr(backend, "parameters", ())
+    if not parameters:
+        return _formula(source, symbols)
+    if "pi" in symbols or any(p.name == "pi" for p in parameters):
+        raise SourceError("pi is reserved in specifications with phase parameters")
+    phases = {p.name: z3.Real(p.name) for p in parameters}
+    pi = z3.Real("pi")
+    symbols.update(phases, pi=pi)
+    formula = _formula(source, symbols)
+    external = {p.name for p in parameters} | {"pi"}
+    domain = z3.And(pi > 0, *(z3.And(a >= 0, a < 2*pi) for a in phases.values()))
+
+    def reduce(node):
+        variables = {str(v) for v in get_vars(node)}
+        if not variables & external:
+            return node
+        if variables <= external and z3.is_bool(node):
+            solver = z3.Solver()
+            solver.set(timeout=10_000)
+            solver.add(domain, z3.Not(node))
+            if solver.check() == z3.unsat:
+                return z3.BoolVal(True)
+            solver = z3.Solver()
+            solver.set(timeout=10_000)
+            solver.add(domain, node)
+            if solver.check() == z3.unsat:
+                return z3.BoolVal(False)
+            raise SourceError("Phase assertions support the declared 0 <= alpha < 2*pi domain, not angle-dependent restrictions")
+        if not z3.is_bool(node):
+            raise SourceError("Phase parameters cannot be mixed with finite classical arithmetic")
+        return node.decl()(*(reduce(child) for child in node.children()))
+
+    return z3.simplify(reduce(formula))
+
+
 class _ProgramParser(Tokens):
     def __init__(self, source):
         super().__init__(source)
@@ -218,6 +261,7 @@ class _ProgramParser(Tokens):
         self.has_naturals = False
         self.parameters = []
         self.families = []
+        self.states = []
 
     def name_list(self):
         result = [self.identifier()]
@@ -352,10 +396,24 @@ class _ProgramParser(Tokens):
         self.pop("program")
         program_name = self.identifier()
         self.pop("{")
-        if self.accept("reference"):
-            self.references = self.name_list()
-            self.pop(";")
-        while self.accept("gate"):
+        while self.peek in ("state", "reference", "gate"):
+            if self.accept("state"):
+                while True:
+                    name = self.identifier()
+                    qubits = 1
+                    if self.accept("["):
+                        qubits = self.integer()
+                        self.pop("]")
+                    self.states.append(ir.StateParameter(name, qubits))
+                    if not self.accept(","):
+                        break
+                self.pop(";")
+                continue
+            if self.accept("reference"):
+                self.references.extend(self.name_list())
+                self.pop(";")
+                continue
+            self.pop("gate")
             name = self.identifier()
             self.pop("{")
             cases = []
@@ -412,8 +470,8 @@ class Protocol:
         if retry:
             from .distillation import NaturalVariable
             variables.append(NaturalVariable("n", "proof"))
-            if parsed.parameters or parsed.families:
-                raise SourceError("The specialized retry schema does not support extra phase parameters or gate families")
+            if parsed.parameters or parsed.families or parsed.states:
+                raise SourceError("The specialized retry schema does not support extra state or phase parameters or gate families")
         if len({v.name for v in variables}) != len(variables):
             raise SourceError("Classical variable names must be unique across processes")
         symbols = {v.name: v.symbol for v in variables}
@@ -469,7 +527,8 @@ class Protocol:
         else:
             registers = tuple(parsed.references) + tuple(q for p in processes for q in p.qubits)
             result = ir.Program(self.name, tuple(variables), registers, tuple(processes), tuple(parsed.references),
-                                parameters=tuple(parsed.parameters), gate_families=tuple(parsed.families))
+                                parameters=tuple(parsed.parameters), gate_families=tuple(parsed.families),
+                                state_parameters=tuple(parsed.states))
         result.validate()
         return result
 
@@ -491,7 +550,7 @@ class AssertionSpec:
 
     def _compile(self, backend):
         symbols = {v.name: v.symbol for v in backend.variables}
-        classical = _formula(self.classical, symbols)
+        classical = _classical_formula(self.classical, backend)
         quantum = _quantum_effect(self.quantum, backend, symbols)
         result = Assertion(classical, quantum)
         result.validate(backend)
@@ -530,7 +589,16 @@ class HoareTriple:
     post: AssertionSpec
 
     def __str__(self):
-        return f"{self.pre}\n{self.protocol.name}\n{self.post}"
+        triple = f"{self.pre}\n{self.protocol.name}\n{self.post}"
+        declarations = []
+        for p in self.protocol._parsed.states:
+            size = "one" if p.qubits == 1 else "two"
+            declarations.append(f"For every normalized {size}-qubit state {p.name}:")
+        for p in self.protocol._parsed.parameters:
+            declarations.append(f"For every phase {p.name} with 0 <= {p.name} < 2*pi:")
+        if declarations:
+            triple = "\n".join(declarations) + "\n" + triple
+        return triple
 
 
 class HoareReport(Report):
@@ -658,6 +726,15 @@ def _quantum_effect(source, backend, symbols):
                 phase = phase_symbol(arguments[0].id)
                 matrix = sp.ImmutableMatrix(sp.diag(1, phase)) if name == "R" else projector(sp.Matrix([1, phase]) / sp.sqrt(2))
                 kind = "unitary" if name == "R" else "effect"
+            elif name == "rho":
+                parameters = {p.name: p for p in backend.state_parameters}
+                if (len(arguments) != 1 or not isinstance(arguments[0], ast.Name)
+                        or arguments[0].id not in parameters):
+                    raise SourceError("rho requires a declared normalized state parameter")
+                parameter = parameters[arguments[0].id]
+                if len(targets) != parameter.qubits:
+                    raise SourceError(f"rho({parameter.name}) requires {parameter.qubits} distinct qubits")
+                matrix, kind = state_projector(parameter.name, parameter.qubits), "effect"
             elif name in {family.name for family in backend.gate_families}:
                 if len(arguments) != 1 or len(targets) != 1:
                     raise SourceError("A gate family requires one classical selector and one qubit")
@@ -718,7 +795,7 @@ def _quantum_effect(source, backend, symbols):
                 return clean(a * b * a.H) if lk == "unitary" and rk == "effect" else clean(a * b)
 
             return kind, ld | rd, ls | rs, multiplied
-        raise SourceError("Use I, Bell[a,b], Zero[q], Plus[q], Equator(alpha)[q], tensor products, and declared unitary applications")
+        raise SourceError("Use I, Bell[a,b], Zero[q], Plus[q], rho(psi)[q], Equator(alpha)[q], tensor products, and declared unitary applications")
 
     kind, dependencies, _, value = build(tree)
     if kind != "effect":
@@ -848,7 +925,15 @@ class RetryProof:
             variables.extend(v for v in schema.variables if isinstance(v, ir.Variable) and v.name in {c.target for c in test if isinstance(c, ir.Measure)})
         attempt = ir.Program("Bilateral test from source", tuple(variables), schema.registers, tuple(tests))
         symbols = {v.name: v.symbol for v in schema.variables}
-        return Distillation(attempt, schema, _formula(self.invariant, symbols),
+        invariant = _formula(self.invariant, symbols)
+        # K_kind is zero outside the proof horizon. Thus (theta and kA<n, K)
+        # and (theta, K) denote the same quantitative assertion. The classical
+        # controller audit uses theta globally, while the replayed Hoare proof
+        # reinstates the paper's explicit horizon at every invariant checkpoint.
+        horizon = symbols["kA"] < symbols["n"]
+        if z3.is_and(invariant):
+            invariant = z3.And(*(c for c in invariant.children() if not c.eq(horizon)))
+        return Distillation(attempt, schema, invariant,
                             _formula(self.decreases, symbols), symbols)
 
     def verify(self):

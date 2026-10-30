@@ -53,10 +53,10 @@ program RSP {
 """)
 
 result = verify(
-    "{ true ; Bell[A,B] }",
+    "{ 0 <= alpha and alpha < 2*pi ; Bell[A,B] }",
     rsp,
-    "{ true ; Equator(alpha)[B] }",
-    invariant="{ d <=> p=1 ; Z[B]^((1-p)*m) * Equator(alpha)[B] }",
+    "{ 0 <= alpha and alpha < 2*pi ; Equator(alpha)[B] }",
+    invariant="{ 0 <= alpha and alpha < 2*pi and (d <=> p=1) ; Z[B]^((1-p)*m) * Equator(alpha)[B] }",
     decreases="1-[d]",
 )
 print(result)
@@ -65,9 +65,10 @@ print(result)
 Output
 
 ```
-{ true ; Bell[A,B] }
+For every phase alpha with 0 <= alpha < 2*pi:
+{ 0 <= alpha and alpha < 2*pi ; Bell[A,B] }
 RSP
-{ true ; Equator(alpha)[B] }
+{ 0 <= alpha and alpha < 2*pi ; Equator(alpha)[B] }
 
 VERIFIED (total correctness)
 
@@ -81,7 +82,7 @@ Proof: [Distributed-tot]
   [PASSED] Ranking decreases: Alice.send ↔ Bob.receive
 ```
 
-Each line is one premise of the `Distributed-tot` rule.
+Each line is one proof obligation, including the premises of `Distributed-tot` and the final postcondition check.
 The brackets list the local rules used to compute it.
 
 ## Writing a protocol
@@ -90,7 +91,7 @@ A program is a list of processes joined by `||`.
 
 ```
 program Name {
-  reference R;
+  state psi;
   gate U { 0: ...; 1: ...; }
   process Alice { declarations  initialization  do ... od }
   ||
@@ -98,7 +99,7 @@ program Name {
 }
 ```
 
-The `reference` and `gate` lines are optional.
+The `state` and `gate` lines are optional.
 Each process declares its own variables and qubits, runs an initialization block, and then an optional communication loop `do ... od`.
 Variables and qubits belong to the process that declares them.
 
@@ -111,7 +112,8 @@ Variables and qubits belong to the process that declares them.
 | `bool d;` | Boolean variable |
 | `int x in -1..2;` | integer variable over a finite range of at most 256 values |
 | `phase alpha;` | read-only symbolic angle, verified for every real value |
-| `reference R;` | program-level, read-only qubit used only by the specification |
+| `state psi;` | program-level parameter for an arbitrary normalized one-qubit state, used only in specifications |
+| `state psi[2];` | arbitrary normalized two-qubit joint state, including entangled states |
 | `array`, `nat` | used by the distillation controller only |
 
 ### Commands
@@ -162,6 +164,8 @@ Assertions are written `"{ classical ; quantum }"`.
 
 **Classical part.** `and`, `or`, `not`, `=>`, `<=>`, `=` and integer arithmetic.
 `[c]` is the 0/1 indicator of condition `c`.
+Phase specifications may also carry the paper's read-only domain `0 <= alpha and alpha < 2*pi`.
+Other angle-dependent restrictions are not supported.
 
 **Quantum part.**
 
@@ -171,10 +175,19 @@ Assertions are written `"{ classical ; quantum }"`.
 | `Bell[a,b]` | projector onto `(\|00⟩+\|11⟩)/√2` |
 | `Zero[q]` | projector onto `\|0⟩` |
 | `Plus[q]` | projector onto `\|+⟩` |
+| `rho(psi)[q]` | projector `\|psi⟩⟨psi\|` for a declared state parameter |
+| `rho(psi)[c,t]` | joint projector for a declared two-qubit state, in register order `c,t` |
 | `Equator(alpha)[q]` | projector onto `(\|0⟩+exp(i*alpha)\|1⟩)/√2` |
 | `P * Q` | tensor product of predicates on disjoint qubits |
 | `U[q] * P` | `U P U†` |
 | `U[q]^(e)` | `U` raised to an integer expression `e`, e.g. `Z[B]^((1-p)*m)` |
+
+`state psi;` corresponds to a Rocq parameter `psi : Vector 2` with hypotheses `WF_Matrix psi` and `psi† * psi = I 1`.
+It does not allocate an extra qubit or choose a particular input state.
+Teleportation uses `rho(psi)[A1] * Bell[A2,B]` as its precondition and `rho(psi)[B]` as its postcondition, matching the three-qubit specification in [Teleportation.v](../../CaseStudies/Teleportation.v).
+The check is symbolic for every normalized `psi`, including the computational-basis states and complex relative phases.
+Non-local CNOT declares `state psi[2];` and uses the paper's four-qubit specification `Bell[A,B] * rho(psi)[C,T]` to `CNOT[C,T] * rho(psi)[C,T]`.
+Its joint input may be entangled, and neither example introduces reference qubits.
 
 **Invariant.** Required for protocols with a `do ... od` loop.
 It must hold after initialization and be preserved by every matching send/receive pair.
@@ -211,8 +224,8 @@ Deleting Bob's Z correction from RSP
 
 ```python
 broken = program(rsp.source.replace("if r=1 then Z[B]; fi;", ""))
-print(verify("{ true ; Bell[A,B] }", broken, "{ true ; Equator(alpha)[B] }",
-             invariant="{ d <=> p=1 ; Z[B]^((1-p)*m) * Equator(alpha)[B] }",
+print(verify("{ 0 <= alpha and alpha < 2*pi ; Bell[A,B] }", broken, "{ 0 <= alpha and alpha < 2*pi ; Equator(alpha)[B] }",
+             invariant="{ 0 <= alpha and alpha < 2*pi and (d <=> p=1) ; Z[B]^((1-p)*m) * Equator(alpha)[B] }",
              decreases="1-[d]"))
 ```
 
@@ -279,19 +292,21 @@ Runtime files stay in `.runtime/`.
 | `phase-choice` | Scheduler-selected phase rotations | the output follows the recorded choice | App. C.3 |
 | `teleportation` | Teleportation | identity channel on arbitrary inputs, both message orders | §6.1, App. B.1 |
 | `swapping` | Entanglement swapping | remote Bell pair, both message orders | §6.2, App. B.2 |
-| `remote-cnot` | Non-local CNOT | the CNOT channel, including entangled inputs | App. C.1 |
+| `remote-cnot` | Non-local CNOT | CNOT on an arbitrary normalized joint input, including entangled inputs | App. C.1 |
 | `distillation` | BBPSSW distillation, unbounded retries | both first-acceptance specifications for every horizon `n` | §6.3, App. B.3 |
 
 Distillation uses dedicated forms.
 The preconditions are `E_pass(0,n)` and `E_good(0,n)`, and the invariants use `K_pass(...)` and `K_good(...)`.
+The classical invariant includes `kA<n`, as in the paper.
+The parameter `n` is a proof horizon, not an execution limit, and the triples concern first-acceptance mass rather than termination on every possible resource state.
 These forms apply to the BBPSSW retry controller only.
 After verification, `distill_good.bounds(fidelity="4/5", attempts=5)` returns the acceptance and Bell-overlap bounds for independent Werner pairs.
 `trace_retry(distill, [(0,1),(1,1)])` follows the controller through given measurement outcomes.
-See the Notebook for the full calls.
+The Notebook contains both verification calls and the probability and fidelity bounds.
 
 ## Scope
 
-- At most six qubits in total, including reference qubits.
+- At most six qubits in the finite-register engine.
 - Finite classical domains (`bit`, `bool`, bounded `int`).
 - Gates `H`, `X`, `Z`, `CNOT`, `R(alpha)` and exact one-qubit gate families.
 - Unbounded arrays and counters only through the distillation controller.

@@ -62,6 +62,8 @@ def format_program(program):
     lines = [program.name, f"Registers (tensor order): {', '.join(program.registers)}"]
     if program.references:
         lines.append(f"Read-only reference: {', '.join(program.references)}")
+    if getattr(program, "state_parameters", ()):
+        lines.append(f"Arbitrary normalized states: {', '.join(p.name for p in program.state_parameters)}")
     for process in program.processes:
         lines.append(f"\nProcess {process.name}, owns {process.qubits}:")
         lines.append(format_block(process.init, 2))

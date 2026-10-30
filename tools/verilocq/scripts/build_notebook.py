@@ -71,10 +71,10 @@ cells = [
     '''),
     code(r'''
     rsp_report = verify(
-        "{ true ; Bell[A,B] }",
+        "{ 0 <= alpha and alpha < 2*pi ; Bell[A,B] }",
         rsp,
-        "{ true ; Equator(alpha)[B] }",
-        invariant="{ d <=> p=1 ; Z[B]^((1-p)*m) * Equator(alpha)[B] }",
+        "{ 0 <= alpha and alpha < 2*pi ; Equator(alpha)[B] }",
+        invariant="{ 0 <= alpha and alpha < 2*pi and (d <=> p=1) ; Z[B]^((1-p)*m) * Equator(alpha)[B] }",
         decreases="1-[d]",
     )
     # Use rsp_report.explain() to open all proof steps at once.
@@ -119,10 +119,10 @@ cells = [
     '''),
     code(r'''
     bad_rsp_report = verify(
-        "{ true ; Bell[A,B] }",
+        "{ 0 <= alpha and alpha < 2*pi ; Bell[A,B] }",
         bad_rsp,
-        "{ true ; Equator(alpha)[B] }",
-        invariant="{ d <=> p=1 ; Z[B]^((1-p)*m) * Equator(alpha)[B] }",
+        "{ 0 <= alpha and alpha < 2*pi ; Equator(alpha)[B] }",
+        invariant="{ 0 <= alpha and alpha < 2*pi and (d <=> p=1) ; Z[B]^((1-p)*m) * Equator(alpha)[B] }",
         decreases="1-[d]",
     )
     bad_rsp_report
@@ -133,7 +133,7 @@ cells = [
     code(r'''
     tele = program("""
     program Teleportation {
-      reference R;
+      state psi;
 
       process Alice {
         qubits A1, A2;
@@ -187,14 +187,14 @@ cells = [
     '''),
     code(r'''
     tele_report = verify(
-        "{ true ; Bell[R,A1] * Bell[A2,B] }",
+        "{ true ; rho(psi)[A1] * Bell[A2,B] }",
         tele,
-        "{ true ; Bell[R,B] }",
+        "{ true ; rho(psi)[B] }",
         invariant="""{
           pA=pB and dAz=dBz and dAx=dBx
           and ((pB=1) <=> (dBz and dBx))
           and (dBz => i=m1) and (dBx => j=m2)
-          ; X[B]^((1-pB)*m2) * Z[B]^((1-pB)*m1) * Bell[R,B]
+          ; X[B]^((1-pB)*m2) * Z[B]^((1-pB)*m1) * rho(psi)[B]
         }""",
         decreases="2-[dAz]-[dAx]",
     )
@@ -269,7 +269,7 @@ cells = [
     code(r'''
     cnot = program("""
     program NonlocalCNOT {
-      reference RC, RT;
+      state psi[2];
 
       process Alice {
         qubits C, A;
@@ -310,12 +310,12 @@ cells = [
     '''),
     code(r'''
     cnot_report = verify(
-        "{ true ; Bell[RC,C] * Bell[RT,T] * Bell[A,B] }",
+        "{ true ; Bell[A,B] * rho(psi)[C,T] }",
         cnot,
-        "{ true ; CNOT[C,T] * (Bell[RC,C] * Bell[RT,T]) }",
+        "{ true ; CNOT[C,T] * rho(psi)[C,T] }",
         invariant="""{
           (dA <=> pB=1) and (dB <=> pA=1)
-          ; X[T]^((1-pB)*m1) * Z[C]^((1-pA)*m2) * CNOT[C,T] * (Bell[RC,C] * Bell[RT,T])
+          ; X[T]^((1-pB)*m1) * Z[C]^((1-pA)*m2) * CNOT[C,T] * rho(psi)[C,T]
         }""",
         decreases="2-[dA]-[dB]",
     )
@@ -432,7 +432,7 @@ cells = [
         "{ true ; E_pass(0,n) }",
         distill,
         "{ doneA and doneB and kA=kB and kA<n ; I }",
-        invariant=assertion(theta, "K_pass(kA,mA,mB,n)"),
+        invariant=assertion(f"({theta}) and kA<n", "K_pass(kA,mA,mB,n)"),
         decreases=t,
     )
     distill_pass
@@ -442,7 +442,7 @@ cells = [
         "{ true ; E_good(0,n) }",
         distill,
         "{ doneA and doneB and kA=kB and kA<n ; Bell[a_c[kA],b_c[kB]] }",
-        invariant=assertion(theta, "K_good(kA,mA,mB,n)"),
+        invariant=assertion(f"({theta}) and kA<n", "K_good(kA,mA,mB,n)"),
         decreases=t,
     )
     distill_good

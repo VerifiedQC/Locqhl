@@ -170,10 +170,11 @@ class DistributedTests(unittest.TestCase):
 
     def test_reference_is_read_only(self):
         case = self.good
-        alice, bob = case.program.processes
+        program = replace(case.program, registers=("R",) + case.program.registers, references=("R",))
+        alice, bob = program.processes
         alice = replace(alice, init=seq(Gate("X", ("R",)), alice.init))
         with self.assertRaises(Unsupported):
-            replace(case.program, processes=(alice, bob)).validate()
+            replace(program, processes=(alice, bob)).validate()
 
     def test_classical_nonlocal_reads_are_rejected(self):
         case = self.good
