@@ -12,7 +12,7 @@ from html import escape
 import sympy as sp
 import z3
 
-from .quantum import Assertion, clean, embed, evaluate, gate_matrix, psd
+from .quantum import Assertion, clean, embed, evaluate, gate_matrix, psd, state_counterexample
 from .syntax import (Assign, Gate, If, Measure, Reset, Skip, Unsupported,
                      expr, live_before, names)
 from .derivation import build_wp, LocalEvidence, ImplicationEvidence, ProofPlan
@@ -47,6 +47,18 @@ class Report:
     mode: str
     obligations: list[Obligation] = field(default_factory=list)
     derivation: object = field(default=None, repr=False, compare=False)
+    backend: object = field(default=None, repr=False, compare=False)
+    specification: dict | None = field(default=None, repr=False, compare=False)
+
+    def certificate(self):
+        """The proof certificate as a JSON-compatible dictionary."""
+        from .certificate import build
+        return build(self)
+
+    def save_certificate(self, path):
+        """Write the proof certificate as JSON (indent=2, lists in derivation order)."""
+        from .certificate import save
+        save(self, path)
 
     @property
     def verified(self):
@@ -169,7 +181,7 @@ def check_hoare(program, pre, block, post, name="Local Hoare triple",
         wp = build_wp(program, block, post)
     except Unsupported as error:
         return Obligation(name, "operator inequality", "INCOMPLETE", 0, str(error))
-    evidence = LocalEvidence(program, pre, block, post, wp)
+    evidence = LocalEvidence(program, pre, block, post, wp, relevant=tuple(sorted(relevant)))
     count = 0
     try:
         for state in states(program, pre.classical, relevant, max_states):
@@ -177,13 +189,20 @@ def check_hoare(program, pre, block, post, name="Local Hoare triple",
             after = wp.evaluate(program, state, max_paths)
             difference = clean(after - before)
             decision = psd(difference)
+            parameter_witness = None
+            if decision is None:
+                parameter_witness = state_counterexample(difference, program)
+                if parameter_witness is not None:
+                    decision = False
             count += 1
             evidence.record(state, before, after, difference, decision)
+            if parameter_witness is not None:
+                evidence.sample["state_parameters"] = parameter_witness
             if decision is False:
                 return Obligation(name, "operator inequality", "FAILED", count,
                                   "The precondition does not guarantee this intermediate proof condition. "
                                   "The program or the supplied invariant may need to change.",
-                                  state, evidence=evidence)
+                                  dict(state, **(parameter_witness or {})), evidence=evidence)
             if decision is None:
                 return Obligation(name, "operator inequality", "INCOMPLETE", count,
                                   "Exact positivity could not be decided", state, evidence=evidence)
@@ -245,7 +264,8 @@ def verify_distributed(program, pre, invariant, post, variant=None,
     for assertion in (pre, invariant, post):
         assertion.validate(program)
     mode = "partial correctness" if variant is None else "total correctness"
-    report = Report(program.name, mode)
+    report = Report(program.name, mode, backend=program,
+                    specification={"pre": pre, "invariant": invariant, "post": post, "variant": variant})
     options = {"max_states": max_states, "max_paths": max_paths, "validate": False}
     report.obligations.append(check_hoare(program, pre, program.initialization, invariant,
                                          "Initialization establishes invariant", **options))

@@ -1,10 +1,4 @@
-"""The paper's guarded teleportation, with a read-only reference qubit.
-
-The reference is a specification device: preserving a Bell pair with R proves
-the induced channel is identity on arbitrary inputs, including entangled ones.
-Alice and Bob never operate on R. The protocol's executable code otherwise
-follows CSTele in ../case_study_guarded_programs.tex.
-"""
+"""Guarded protocols with independently constructed exact specifications."""
 
 from dataclasses import dataclass
 from itertools import permutations, product
@@ -13,9 +7,9 @@ import sympy as sp
 import z3
 
 from .quantum import (Assertion, BELL, Effect, I2, X, Z, clean, embed,
-                      evaluate, projector, tensor)
+                      evaluate, projector, state_projector, tensor)
 from .syntax import (Assign, Branch, Gate, If, Measure, Process, Program,
-                     Receive, Send, Variable, seq, Unsupported, live_before, names)
+                     Receive, Send, StateParameter, Variable, seq, Unsupported, live_before, names)
 from .verifier import (execute, verify_distributed, states, Report, check_hoare,
                        check_implication, classical_wp)
 
@@ -74,25 +68,26 @@ def teleportation(omit_correction=None):
         ))
     suffix = "" if omit_correction is None else f" — missing {omit_correction} correction"
     program = Program("Guarded teleportation" + suffix, variables,
-                      ("R", "A1", "A2", "B"), (alice, bob), references=("R",))
+                      ("A1", "A2", "B"), (alice, bob), state_parameters=(StateParameter("psi"),))
     theta = z3.And(
         v["pA"] == v["pB"], v["dAz"] == v["dBz"], v["dAx"] == v["dBx"],
         (v["pB"] == 1) == z3.And(v["dBz"], v["dBx"]),
         z3.Implies(v["dBz"], v["i"] == v["m1"]),
         z3.Implies(v["dBx"], v["j"] == v["m2"]),
     )
-    target = embed(projector(BELL), (0, 3), 4)  # Bell_RB ⊗ I on Alice's qubits
+    rho = state_projector("psi")
+    target = embed(rho, (2,), 3)
     cases = []
     for u in (0, 1):
         for w in (0, 1):
             for done in (0, 1):
                 local = (X if w and not done else I2) * (Z if u and not done else I2)
-                operator = embed(sp.ImmutableMatrix(local), (3,), 4)
+                operator = embed(sp.ImmutableMatrix(local), (2,), 3)
                 guard = z3.And(v["m1"] == u, v["m2"] == w, v["pB"] == done)
                 cases.append((guard, clean(operator * target * operator.H)))
-    pre = Assertion(True, Effect.constant(projector(tensor(BELL, BELL)), "Bell_RA1 ⊗ Bell_A2B"))
-    invariant = Assertion(theta, Effect("outcome-dependent Bell_RB invariant", tuple(cases)))
-    post = Assertion(True, Effect.constant(target, "Bell_RB ⊗ I_A1A2"))
+    pre = Assertion(True, Effect.constant(tensor(rho, projector(BELL)), "rho(psi)[A1] * Bell[A2,B]"))
+    invariant = Assertion(theta, Effect("outcome-dependent rho(psi)[B] invariant", tuple(cases)))
+    post = Assertion(True, Effect.constant(target, "rho(psi)[B]"))
     variant = 2 - z3.If(v["dAz"], 1, 0) - z3.If(v["dAx"], 1, 0)
     return CaseStudy(program, pre, invariant, post, variant, v)
 
@@ -101,7 +96,7 @@ def audit_teleportation_orders(case):
     """Additional exact channel audit for this two-message example only.
 
     Enumerate both pair orders and all measurement outcomes. Derive effective
-    2×2 Kraus maps from the input A1 to output B by tracing out R,A1,A2.
+    2×2 Kraus maps from the input A1 to output B by tracing out A1,A2.
     Compare the resulting 4×4 channel matrix with identity on the full matrix
     space, which covers every input density operator, not selected test states.
     This is an example-specific audit, not the general distributed verifier.
@@ -109,7 +104,7 @@ def audit_teleportation_orders(case):
     program = case.program
     program.validate()
     pairs = list(program.matching_pairs())
-    if len(pairs) != 2 or program.registers != ("R", "A1", "A2", "B"):
+    if len(pairs) != 2 or program.registers != ("A1", "A2", "B"):
         raise Unsupported("Channel audit is specific to the two-message teleportation example")
     relevant = set()
     for ordering in permutations(pairs):
@@ -117,8 +112,8 @@ def audit_teleportation_orders(case):
         for _, guard, block in reversed(ordering):
             live = names(guard) | live_before(block, live)
         relevant |= live_before(program.initialization, live)
-    # |0>_R ⊗ input_A1 ⊗ |Phi+>_A2B : C^2 -> C^16.
-    isometry = tensor(sp.ImmutableMatrix([1, 0]), I2, BELL)
+    # input_A1 ⊗ |Phi+>_A2B : C^2 -> C^8.
+    isometry = tensor(I2, BELL)
     records = []
     for initial in states(program, True, relevant):
         init_paths = execute(program, program.initialization, initial)
@@ -139,7 +134,7 @@ def audit_teleportation_orders(case):
                 if not evaluate(program.termination, state, program):
                     raise Unsupported("Two communications did not terminate this example")
                 output_map = clean(kraus * isometry)
-                for environment in range(8):
+                for environment in range(4):
                     effective = output_map.extract([2 * environment, 2 * environment + 1], [0, 1])
                     if effective.is_zero_matrix:
                         continue
@@ -203,7 +198,7 @@ def entanglement_swapping(omit_correction=None):
 
 
 def remote_cnot(omit_correction=None):
-    """Choi specification covers arbitrary two-qubit inputs, including entanglement."""
+    """The paper's four-qubit protocol on an arbitrary joint input psi_CT."""
     if omit_correction not in (None, "X", "Z"):
         raise ValueError("omit_correction must be None, 'X' or 'Z'")
     variables = tuple(Variable(name, owner, domain) for owner, entries in (
@@ -227,23 +222,23 @@ def remote_cnot(omit_correction=None):
             Branch("send", z3.Not(v["dB"]), Send("c_2", v["m2"]), seq(Assign("dB", True))),
         ))
     program = Program("Non-local CNOT" + (f" - missing {omit_correction}" if omit_correction else ""),
-                      variables, ("RC", "RT", "C", "A", "B", "T"),
-                      (alice, bob), references=("RC", "RT"))
-    data = clean(embed(projector(BELL), (0, 2), 6) * embed(projector(BELL), (1, 5), 6))
-    initial = clean(data * embed(projector(BELL), (3, 4), 6))
+                      variables, ("C", "A", "B", "T"),
+                      (alice, bob), state_parameters=(StateParameter("psi", 2),))
+    data = embed(state_projector("psi", 2), (0, 3), 4)
+    initial = clean(data * embed(projector(BELL), (1, 2), 4))
     from .quantum import CNOT
-    desired = embed(CNOT, (2, 5), 6)
+    desired = embed(CNOT, (0, 3), 4)
     target = clean(desired * data * desired.H)
     cases = []
     for u, w, pa, pb in product((0, 1), repeat=4):
-        zc = embed(Z if w and not pa else I2, (2,), 6)
-        xt = embed(X if u and not pb else I2, (5,), 6)
+        zc = embed(Z if w and not pa else I2, (0,), 4)
+        xt = embed(X if u and not pb else I2, (3,), 4)
         guard = z3.And(v["m1"] == u, v["m2"] == w, v["pA"] == pa, v["pB"] == pb)
         cases.append((guard, clean(xt * zc * target * zc.H * xt.H)))
     theta = z3.And(v["dA"] == (v["pB"] == 1), v["dB"] == (v["pA"] == 1))
-    return CaseStudy(program, Assertion(True, Effect.constant(initial, "input Choi state and shared Bell pair")),
+    return CaseStudy(program, Assertion(True, Effect.constant(initial, "Bell[A,B] * rho(psi)[C,T]")),
                      Assertion(theta, Effect("pending non-local CNOT corrections", tuple(cases))),
-                     Assertion(True, Effect.constant(target, "ideal CNOT Choi state")),
+                     Assertion(True, Effect.constant(target, "CNOT[C,T] * rho(psi)[C,T]")),
                      2 - z3.If(v["dA"], 1, 0) - z3.If(v["dB"], 1, 0), v)
 
 
@@ -284,9 +279,10 @@ def remote_state_preparation(omit_correction=None):
         Branch("receive", v["p"] == 0, Receive("c", "r"), seq(correction, Assign("p", 1))),))
     p = Program("RSP" + (" - missing Z correction" if omit_correction == "Z" else ""), variables,
                 ("A", "B"), (alice, bob), parameters=(PhaseParameter("alpha", "Alice"),))
-    return CaseStudy(p, assertion("true", "Bell[A,B]")._compile(p),
-                     assertion("d <=> p = 1", "Z[B]^((1-p)*m) * Equator(alpha)[B]")._compile(p),
-                     assertion("true", "Equator(alpha)[B]")._compile(p), 1-z3.If(v["d"], 1, 0), v)
+    domain = "0 <= alpha and alpha < 2*pi"
+    return CaseStudy(p, assertion(domain, "Bell[A,B]")._compile(p),
+                     assertion(f"{domain} and (d <=> p = 1)", "Z[B]^((1-p)*m) * Equator(alpha)[B]")._compile(p),
+                     assertion(domain, "Equator(alpha)[B]")._compile(p), 1-z3.If(v["d"], 1, 0), v)
 
 
 def scheduler_phase_choice():

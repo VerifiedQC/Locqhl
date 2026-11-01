@@ -110,43 +110,49 @@ class WPNode:
         names, counter = {}, count()
         for node in order:
             names[id(node)] = "Q" if node.rule == "Target" else f"W{next(counter)}"
-        lines = ["Backward predicate calculation:"]
+        definitions, targets, steps = [], [], []
         for node in order:
             name = names[id(node)]
             if node.rule == "Target":
                 condition = format_expression(node.target.classical)
-                lines.append(f"Q(sigma) = [{condition}] * ({node.target.quantum.label})(sigma)")
-                lines.append("  [Assert-Eq]")
+                targets.append(f"Q(sigma) = [{condition}] * ({node.target.quantum.label})(sigma)")
+                steps.append("[Assert-Eq] Target assertion Q.")
                 continue
             command = node.command
             after = names[id(node.after)] if node.after is not None else ""
             source = (f"if {format_expression(command.condition)} then ... else ... fi"
                       if node.rule == "If" else format_block((command,)).strip().rstrip(";"))
-            lines.append(f"[{node.rule} WP] {{ {name} }} {source} {{ {after or 'Q_after_if'} }}")
+            steps.append(f"[{node.rule} WP] {{ {name} }} {source} {{ {after or 'Q_after_if'} }}")
             if node.rule == "Assign":
-                lines.append(f"  {name}(sigma) = {after}(sigma[{command.target} <- {format_expression(command.value)}])")
+                definitions.append(f"{name}(sigma) = {after}(sigma[{command.target} <- {format_expression(command.value)}])")
             elif node.rule == "Unitary":
                 gate = source
-                lines.append(f"  {name}(sigma) = {gate}^dagger * {after}(sigma) * {gate}")
+                definitions.append(f"{name}(sigma) = {gate}^dagger * {after}(sigma) * {gate}")
             elif node.rule == "Skip":
-                lines.append(f"  {name}(sigma) = {after}(sigma)")
+                definitions.append(f"{name}(sigma) = {after}(sigma)")
             elif node.rule == "Meas":
                 u = node.outcome
                 m = f"M_{u}[{command.qubit}]"
-                lines.append(f"  {name}(sigma) = sum_{{{u}=0,1}} {m}^dagger * {after}(sigma[{command.target} <- {u}]) * {m}")
-                lines.append(f"  {u} is fresh; both outcome pullbacks are added, with no normalization.")
-                lines.append("  [Branch-Accum] Sum the two measurement outcomes.")
+                definitions.append(f"{name}(sigma) = sum_{{{u}=0,1}} {m}^dagger * {after}(sigma[{command.target} <- {u}]) * {m}")
+                steps.append(f"  {u} is fresh. Both outcome pullbacks are added, with no normalization.")
+                steps.append("  [Branch-Accum] Sum the two measurement outcomes.")
             elif node.rule == "Init":
-                lines.append(f"  {name}(sigma) = sum_{{u=0,1}} (|0><u|)^dagger * {after}(sigma) * (|0><u|)")
+                definitions.append(f"{name}(sigma) = sum_{{u=0,1}} (|0><u|)^dagger * {after}(sigma) * (|0><u|)")
             elif node.rule == "If":
                 yes, no = names[id(node.yes)], names[id(node.no)]
-                lines.append(f"  {name}(sigma) = {yes}(sigma) if {format_expression(command.condition)}; otherwise {no}(sigma)")
-        return "\n".join(lines)
+                definitions.append(f"{name}(sigma) = {yes}(sigma) if {format_expression(command.condition)}, otherwise {no}(sigma)")
+        return "\n".join([
+            "Predicate definitions (local to this check):",
+            "W labels name intermediate predicates. Q is the target assertion.",
+            "sigma is the classical store. Each predicate evaluates to a quantum effect matrix.",
+            *definitions, *targets, "", "Backward predicate calculation:", *steps,
+        ])
 
 
 def build_wp(program, block, post):
     fresh = count()
     forbidden = set(program.varmap) | {p.name for p in getattr(program, "parameters", ())}
+    forbidden.update(p.name for p in getattr(program, "state_parameters", ()))
 
     def build(commands, tail, nesting=0):
         if nesting > 256:
@@ -183,12 +189,17 @@ class LocalEvidence:
     checked_cases: int = 0
     sample: dict | None = None
     exhaustive: bool = False
+    relevant: tuple = ()
+    records: list = field(default_factory=list)
 
     def record(self, state, before, after, difference, decision):
         self.checked_cases += 1
+        entry = {"state": dict(state), "pre": before, "wp": after,
+                 "difference": difference, "decision": decision}
+        # Every examined state is kept for the certificate; the sample is the one displayed.
+        self.records.append(entry)
         if self.sample is None or decision is not True:
-            self.sample = {"state": dict(state), "pre": before, "wp": after,
-                           "difference": difference, "decision": decision}
+            self.sample = dict(entry)
 
     def summary(self):
         rules = list(self.wp.rules())
@@ -207,6 +218,8 @@ class LocalEvidence:
             lines.append("The classical precondition has no satisfying input under the declared domains: the triple is vacuous. No operator evaluation is needed.")
         if self.wp.rule == "Target":
             lines[-2] = lines[-2].replace("W0", "Q")
+        if self.sample is not None and "state_parameters" in self.sample:
+            lines.append(f"Exact counterexample parameters: {self.sample['state_parameters']}")
         if matrices and self.sample is not None:
             sample = self.sample
             lines.extend(["One recorded valuation from the checks completed so far; overall coverage depends on the obligation status:",

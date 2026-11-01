@@ -306,7 +306,10 @@ class Distillation:
         # The schema must use the very same test circuit at initialization/retry.
         # Every test event is checked structurally above; matrix identities below
         # are derived independently from the actual attempt program.
-        report = Report("Unbounded BBPSSW distillation", "total correctness, every finite n >= 1")
+        report = Report("Unbounded BBPSSW distillation", "total correctness, every finite n >= 1",
+                        backend=self.controller,
+                        specification={"pre": None, "invariant": None, "post": None, "variant": self.variant,
+                                       "classical_invariant": self.theta, "attempt": self.attempt})
         report.obligations.extend(self._control_checks())
         control_checks = tuple(report.obligations)
         local_start = len(report.obligations)
