@@ -604,7 +604,8 @@ class HoareTriple:
 class HoareReport(Report):
     """A source triple with a concise result; full obligations remain inspectable."""
     def __init__(self, triple, report, retry=None):
-        super().__init__(report.program, report.mode, report.obligations, derivation=report.derivation)
+        super().__init__(report.program, report.mode, report.obligations, derivation=report.derivation,
+                         backend=report.backend, specification=report.specification)
         self.triple = triple
         self._retry = retry
 
@@ -831,7 +832,9 @@ def verify(precondition=None, protocol=None, postcondition=None, *, pre=None, po
     if protocol._parsed.arrays or protocol._parsed.has_naturals:
         if limits:
             raise SourceError("The unbounded proof rule does not use finite exploration limits")
-        return _verify_retry_triple(triple, invariant, decreases)
+        report = _verify_retry_triple(triple, invariant, decreases)
+        report.specification["source"] = _specification_source(triple, invariant, decreases)
+        return report
     backend = protocol._lower()
     initial, final = pre._compile(backend), post._compile(backend)
     if invariant is None:
@@ -840,14 +843,25 @@ def verify(precondition=None, protocol=None, postcondition=None, *, pre=None, po
         if decreases is not None:
             raise SourceError("A loop-free program does not need a ranking function")
         from .verifier import check_hoare
-        report = Report(backend.name, "loop-free correctness", [check_hoare(backend, initial, backend.initialization, final, **limits)])
+        report = Report(backend.name, "loop-free correctness", [check_hoare(backend, initial, backend.initialization, final, **limits)],
+                        backend=backend, specification={"pre": initial, "invariant": None, "post": final, "variant": None,
+                                                        "source": _specification_source(triple, None, None)})
         report.derivation = ProofPlan("Local WP / Conseq", "semantic predicate transformers", report)
         return HoareReport(triple, report)
     invariant = _assertion_spec(invariant)
     symbols = {v.name: v.symbol for v in backend.variables}
     rank = None if decreases is None else _formula(decreases, symbols)
     report = verify_distributed(backend, initial, invariant._compile(backend), final, variant=rank, **limits)
+    report.specification["source"] = _specification_source(triple, invariant, decreases)
     return HoareReport(triple, report)
+
+
+def _specification_source(triple, invariant, decreases):
+    """The specification exactly as written, for the certificate."""
+    invariant = None if invariant is None else _assertion_spec(invariant)
+    return {"pre": str(triple.pre), "post": str(triple.post),
+            "invariant": None if invariant is None else str(invariant),
+            "decreases": decreases, "triple": str(triple)}
 
 
 def _verify_retry_triple(triple, invariant, decreases):

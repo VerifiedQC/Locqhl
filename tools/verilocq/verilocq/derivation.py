@@ -189,12 +189,17 @@ class LocalEvidence:
     checked_cases: int = 0
     sample: dict | None = None
     exhaustive: bool = False
+    relevant: tuple = ()
+    records: list = field(default_factory=list)
 
     def record(self, state, before, after, difference, decision):
         self.checked_cases += 1
+        entry = {"state": dict(state), "pre": before, "wp": after,
+                 "difference": difference, "decision": decision}
+        # Every examined state is kept for the certificate; the sample is the one displayed.
+        self.records.append(entry)
         if self.sample is None or decision is not True:
-            self.sample = {"state": dict(state), "pre": before, "wp": after,
-                           "difference": difference, "decision": decision}
+            self.sample = dict(entry)
 
     def summary(self):
         rules = list(self.wp.rules())

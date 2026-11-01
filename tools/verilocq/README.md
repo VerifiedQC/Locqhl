@@ -217,6 +217,38 @@ For more detail on a result
 - `result.explain()` expands the backward predicate calculations, intermediate W predicates, measurement-outcome sums and solver conditions.
 - `result.explain(matrices=True)` also shows the recorded precondition, WP and residual matrices.
   The displayed valuation illustrates one case of the exhaustive check.
+- `result.certificate()` returns the proof certificate as a dictionary, and `result.save_certificate(path)` writes it as JSON.
+
+### Proof certificates
+
+A certificate is a machine-readable record of the derivation behind a result.
+It is the input to a future printer that will turn it into a Rocq proof script.
+The format is self-contained and uses no Rocq names.
+
+```python
+rsp_report.save_certificate("rsp.certificate.json")
+certificate = rsp_report.certificate()
+certificate["rule"], [p["status"] for p in certificate["premises"]]
+```
+
+The document has `"format": "verilocq-certificate/1"` and these sections.
+
+| Section | Content |
+|---|---|
+| `tool` | VeriLocQ, Python, Z3 and SymPy versions, the mode, a timestamp and the verdict |
+| `program` | name, source text, pretty text, registers, references, state parameters, gate families, every process with its declarations, initialization and branches as a syntax tree, and the matching pairs as the verifier computes them (label, sender, receiver, channel, guards, local bodies, combined block) |
+| `symbols` | the symbolic phase and state parameters and the SymPy symbols that represent them |
+| `specification` | precondition, invariant, postcondition and ranking function, each with the classical part as a syntax tree, SMT-LIB text and source notation, and the quantum part as the predicate syntax tree together with its exact case matrices. The source text of the specification is kept as written |
+| `rule` | the top-level rule, `Distributed`, `Distributed-tot` or `Local WP / Conseq` |
+| `premises` | one record per obligation, in order: a stable id, the premise kind (`initialization`, `invariant_preserved`, `exit_classical`, `exit_quantum`, `ranking_nonnegative`, `no_deadlock`, `ranking_decreases`), the pair label, the statement (a triple or an implication), the status, the witness and the evidence |
+| `matrices` | every exact matrix, interned once; all matrix references are indices into this table |
+
+Evidence records carry a `kind`.
+A `local` record holds the WP derivation of a local premise: a `Conseq` root whose premise is the tree of `Assign`, `Skip`, `Unitary`, `If`, `Meas` and `Init` steps ending in the `Target` postcondition, and whose side condition lists every classical state examined with its precondition effect, weakest precondition and residual matrices and the decision, plus a summary with counts.
+An `implication` record holds the SMT-LIB query that Z3 decided and the result.
+Distillation adds `indexed_induction` and `indexed_equality` records with the kernel's proof objects (rule names, the interval induction scheme, the recurrence derivation), `hoare_proof` records with the replayed rule steps of the paper-rule derivation, `matrix_equality` records, and `text` records for steps available only as text.
+Matrix entries are exact SymPy expressions rendered by `str()`, with the free symbols listed per matrix.
+Lists keep the order in which VeriLocQ produced them.
 
 ### A failing example
 
@@ -317,4 +349,4 @@ The Notebook contains both verification calls and the probability and fidelity b
 ## TODO
 
 - **Output goals.** Export the proof obligations of a triple as Rocq goals.
-  Not implemented.
+  Not implemented. The JSON proof certificate is the planned input of that printer.
