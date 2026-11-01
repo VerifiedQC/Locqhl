@@ -2,17 +2,17 @@
 
 A certificate records the derivation that a report implicitly performed: the
 program and specification as structured syntax, the top-level rule and its
-premises, every local WP tree with the Löwner side condition at every examined
+premises, every local WP graph with the Löwner side condition at every examined
 classical state, every classical SMT query, and the indexed proof objects of
 the distillation kernel. It is self-contained JSON for a later Rocq printer and
 depends on no Rocq naming. Nothing here changes the verification itself.
 
-Encoding conventions, format "verilocq-certificate/1":
+Encoding conventions, format "verilocq-certificate/2":
 
 - Classical expressions carry three views: "ast" (nested objects with a
   "kind"), "smtlib" (Z3's s-expression) and "text" (the source notation).
 - Matrices are interned once in the top-level "matrices" table and referenced
-  by index. Entries are exact SymPy expressions rendered by str(); the symbols
+  by index. Entries are exact SymPy expressions rendered by srepr(); the symbols
   they mention are listed per matrix and described in "symbols".
 - Indexed terms and Hoare formulas (hoare.py, indexed.py) are nested objects
   with a "kind"; integer indices are SymPy expressions rendered by str().
@@ -33,7 +33,7 @@ from .pretty import format_block, format_expression, format_program
 from .quantum import Assertion as EffectAssertion, Effect, phase_symbol, state_symbols, state_vector
 from .syntax import (Assign, Gate, If, Measure, Receive, Reset, Send, Skip, Unsupported, expr, seq)
 
-FORMAT = "verilocq-certificate/1"
+FORMAT = "verilocq-certificate/2"
 
 _PREMISES = (
     ("Initialization establishes invariant", "initialization"),
@@ -132,7 +132,7 @@ class _Matrices:
             self.table.append({
                 "rows": matrix.rows, "cols": matrix.cols,
                 "symbols": sorted(str(s) for s in matrix.free_symbols),
-                "entries": [[str(matrix[r, c]) for c in range(matrix.cols)] for r in range(matrix.rows)],
+                "entries": [[sp.srepr(matrix[r, c]) for c in range(matrix.cols)] for r in range(matrix.rows)],
             })
         return self.index[matrix]
 
@@ -500,20 +500,33 @@ def hoare_record(evidence, matrices):
 
 # Local WP derivations.
 
-def wp_tree(node, program, matrices):
-    if node.rule == "Target":
-        # The target is the premise's postcondition, recorded once in its statement.
-        return {"rule": "Target", "assertion": "statement.post",
-                "text": f"{{ {format_expression(node.target.classical)} ; {node.target.quantum.label} }}"}
-    record = {"rule": node.rule, "command": command_ast(node.command)}
-    if node.rule == "Meas":
-        record["outcome"] = node.outcome
-    if node.rule == "If":
-        record["then"] = wp_tree(node.yes, program, matrices)
-        record["else"] = wp_tree(node.no, program, matrices)
-    elif node.after is not None:
-        record["after"] = wp_tree(node.after, program, matrices)
-    return record
+def wp_graph(node):
+    """Keep shared continuations shared in JSON, not only in Python memory."""
+    pending, records = [node], []
+    indices = {id(node): 0}
+
+    def reference(current):
+        if id(current) not in indices:
+            indices[id(current)] = len(pending)
+            pending.append(current)
+        return indices[id(current)]
+
+    for current in pending:
+        if current.rule == "Target":
+            record = {"rule": "Target", "assertion": "statement.post",
+                      "text": f"{{ {format_expression(current.target.classical)} ; {current.target.quantum.label} }}"}
+        else:
+            record = {"rule": current.rule, "command": command_ast(current.command)}
+            if current.rule == "Meas":
+                record["outcome"] = current.outcome
+            if current.rule == "If":
+                record["then"] = reference(current.yes)
+                record["else"] = reference(current.no)
+            elif current.after is not None:
+                record["after"] = reference(current.after)
+        records.append(record)
+    return {"encoding": "root and after/then/else edges are indices into nodes",
+            "root": 0, "nodes": records}
 
 
 def local_record(evidence, matrices):
@@ -543,7 +556,7 @@ def local_record(evidence, matrices):
                 "states": states,
                 "parameter_counterexample": parameters,
             },
-            "premise": wp_tree(evidence.wp, program, matrices),
+            "premise": wp_graph(evidence.wp),
         },
         "text": evidence.wp.explain(),
     }
@@ -703,7 +716,7 @@ def build(report):
         },
         "encoding": {
             "matrices": "interned in the top-level table; every matrix reference is an index into it",
-            "matrix_entries": "exact SymPy expressions rendered by str(); free symbols are listed per matrix",
+            "matrix_entries": "SymPy srepr expressions; UnitPhase and StateAmplitude are custom constructors; free symbols are listed per matrix",
             "classical_expressions": "ast (nested kinds), smtlib (Z3 s-expression) and text (source notation)",
             "indices": "integer index expressions of indexed terms are SymPy expressions rendered by str()",
         },

@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import sympy as sp
+
 from verilocq import assertion, program, verify
 from verilocq.certificate import FORMAT
 
@@ -60,12 +62,6 @@ def notebook_reports():
     }
 
 
-def wp_nodes(node):
-    count = 1
-    for key in ("after", "then", "else"):
-        if key in node:
-            count += wp_nodes(node[key])
-    return count
 
 
 class CertificateTests(unittest.TestCase):
@@ -125,7 +121,7 @@ class CertificateTests(unittest.TestCase):
                 with self.subTest(case=name, premise=premise["name"]):
                     derivation = premise["evidence"]["derivation"]
                     self.assertEqual(derivation["rule"], "Conseq")
-                    self.assertGreaterEqual(wp_nodes(derivation["premise"]), 1)
+                    self.assertGreaterEqual(len(derivation["premise"]["nodes"]), 1)
                     side = derivation["side_condition"]
                     self.assertEqual(side["kind"], "loewner")
                     self.assertTrue(side["exhaustive"])
@@ -139,10 +135,11 @@ class CertificateTests(unittest.TestCase):
                             self.assertIn("entries", matrices[record[key]])
                     self.assertEqual(premise["statement"]["kind"], "triple")
                     block = premise["statement"]["block"]["ast"]
-                    root = derivation["premise"]
+                    graph = derivation["premise"]
+                    root = graph["nodes"][graph["root"]]
                     if block:
                         self.assertEqual(root["command"], block[0])
-                        self.assertGreater(wp_nodes(root), len(block))
+                        self.assertGreater(len(graph["nodes"]), len(block))
                     else:
                         self.assertEqual(root["rule"], "Target")
         self.assertGreater(found, 0)
@@ -231,6 +228,59 @@ class CertificateTests(unittest.TestCase):
         for document in (saved, rebuilt):
             document["tool"].pop("timestamp")
         self.assertEqual(saved, rebuilt)
+
+
+class CertificateEncodingTests(unittest.TestCase):
+    def test_sequential_conditionals_preserve_shared_continuations(self):
+        sizes = []
+        for n in (4, 8, 12):
+            body = "if b=0 then skip; else skip; fi;" * n
+            p = program("program P { process A { qubit q; bit b; " + body + " } }")
+            report = verify("{ true ; I }", p, "{ true ; I }")
+            self.assertTrue(report.verified)
+            certificate = json.loads(json.dumps(report.certificate()))
+            graph = certificate["premises"][0]["evidence"]["derivation"]["premise"]
+            nodes = graph["nodes"]
+            self.assertEqual(len(nodes), 3*n + 1)
+            seen = set()
+            def walk(index):
+                self.assertIs(type(index), int)
+                self.assertTrue(0 <= index < len(nodes))
+                if index in seen:
+                    return
+                seen.add(index)
+                node = nodes[index]
+                if node["rule"] == "If":
+                    self.assertEqual(nodes[node["then"]]["after"], nodes[node["else"]]["after"])
+                for edge in ("after", "then", "else"):
+                    if edge in node:
+                        walk(node[edge])
+            walk(graph["root"])
+            self.assertEqual(len(seen), len(nodes))
+            sizes.append(len(json.dumps(certificate)))
+        self.assertLess(sizes[-1], 4*sizes[0])
+
+    def test_srepr_preserves_symbolic_parameter_types_and_assumptions(self):
+        from verilocq.certificate import _Matrices
+        from verilocq.quantum import UnitPhase, StateAmplitude, state_symbols, state_projector, phase_symbol
+        # Decode only these test-generated strings. This is not an untrusted-JSON reader.
+        def phase(name, **assumptions):
+            self.assertEqual(assumptions, {"zero": False, "finite": True})
+            return UnitPhase(name)
+        def amplitude(name, **assumptions):
+            self.assertEqual(assumptions, {"complex": True, "finite": True})
+            return StateAmplitude(name)
+        constructors = {"UnitPhase": phase, "StateAmplitude": amplitude}
+        theta, unit = state_symbols("psi")
+        matrix = sp.diag(sp.sin(theta), unit, phase_symbol("alpha"), state_projector("joint", 2)[0, 1])
+        table = _Matrices()
+        record = table.table[table(matrix)]
+        restored = sp.ImmutableMatrix([[sp.sympify(entry, locals=constructors) for entry in row]
+                                       for row in record["entries"]])
+        self.assertEqual(restored, matrix)
+        self.assertEqual(restored.free_symbols, matrix.free_symbols)
+        self.assertEqual(sp.conjugate(restored[1, 1]), 1/unit)
+        self.assertTrue(any(isinstance(symbol, StateAmplitude) for symbol in restored.free_symbols))
 
 
 if __name__ == "__main__":

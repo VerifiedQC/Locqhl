@@ -231,7 +231,7 @@ certificate = rsp_report.certificate()
 certificate["rule"], [p["status"] for p in certificate["premises"]]
 ```
 
-The document has `"format": "verilocq-certificate/1"` and these sections.
+The document has `"format": "verilocq-certificate/2"` and these sections.
 
 | Section | Content |
 |---|---|
@@ -244,10 +244,14 @@ The document has `"format": "verilocq-certificate/1"` and these sections.
 | `matrices` | every exact matrix, interned once; all matrix references are indices into this table |
 
 Evidence records carry a `kind`.
-A `local` record holds the WP derivation of a local premise: a `Conseq` root whose premise is the tree of `Assign`, `Skip`, `Unitary`, `If`, `Meas` and `Init` steps ending in the `Target` postcondition, and whose side condition lists every classical state examined with its precondition effect, weakest precondition and residual matrices and the decision, plus a summary with counts.
+A `local` record holds the WP derivation of a local premise: a `Conseq` root whose premise is a shared graph of `Assign`, `Skip`, `Unitary`, `If`, `Meas` and `Init` steps ending in the `Target` postcondition, and whose side condition lists every classical state examined with its precondition effect, weakest precondition and residual matrices and the decision, plus a summary with counts.
 An `implication` record holds the SMT-LIB query that Z3 decided and the result.
 Distillation adds `indexed_induction` and `indexed_equality` records with the kernel's proof objects (rule names, the interval induction scheme, the recurrence derivation), `hoare_proof` records with the replayed rule steps of the paper-rule derivation, `matrix_equality` records, and `text` records for steps available only as text.
-Matrix entries are exact SymPy expressions rendered by `str()`, with the free symbols listed per matrix.
+Local WP graphs contain a `root` index and a `nodes` table; `after`, `then` and `else` edges are indices into that table. Shared continuations are stored once.
+Matrix entries use SymPy `srepr()`, with free symbols listed per matrix and library versions recorded in `tool`. SymPy is pinned to 1.14.0 in the package dependencies; upgrades should revalidate the serialized representation.
+The custom constructors `UnitPhase(name, zero=False, finite=True)` and `StateAmplitude(name, complex=True, finite=True)` describe unit phases and normalized-state coordinates respectively; a future reader must preserve their semantics and the normalization conditions in `symbols`.
+This is a SymPy-specific representation, not Rocq syntax or an independently checked certificate. Do not evaluate untrusted expression strings; a future importer needs a restricted parser.
+Format version 2 changes matrix-entry encoding and local WP references; consumers of version 1 must be updated.
 Lists keep the order in which VeriLocQ produced them.
 
 ### A failing example
@@ -345,6 +349,8 @@ The Notebook contains both verification calls and the probability and fidelity b
 - Invariants and ranking functions are supplied by the user.
 - Results are checked by this Python implementation together with Z3 and SymPy.
   They are not checked by Rocq.
+
+Historical review findings and their scope are summarized in [REVIEW.md](REVIEW.md).
 
 ## TODO
 
