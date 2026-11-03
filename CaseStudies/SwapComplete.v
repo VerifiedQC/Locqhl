@@ -33,34 +33,19 @@
 From Stdlib Require Import Arith.PeanoNat.
 From QuantumLib Require Import Matrix Quantum Pad VecSet CauchySchwarz.
 From Locqhl.CaseStudies Require BellComplete.
+From Locqhl.CaseStudies Require Import SharedKernel.
 
 Local Open Scope matrix_scope.
-
-(* The Löwner order, written exactly as in Locqhl.Core.Assertions — and as
-   in BellComplete.  Same body, so the three notions are definitionally
-   equal: this file states its theorem in its OWN terms and the case study
-   still closes its obligation by conversion.  That is what keeps the file
-   dependent on QuantumLib alone — no notion of the logic, in particular no
-   [is_effect], appears anywhere below. *)
-Definition lowner {n} (M N : Square n) : Prop :=
-  positive_semidefinite (N .+ (- C1) .* M)%M.
-
-Notation "M ⊑ N" := (lowner M N) (at level 70).
 
 (* ---- The entanglement-swapping matrices ---------------------------- *)
 
 Definition UC : Square (2 ^ 4) := pad_u 4 2 hadamard × pad_ctrl 4 2 3 σx.
-
-Definition Pi (b : nat) : Square 2 :=
-  if Nat.eqb b 0%nat then ∣0⟩⟨0∣ else ∣1⟩⟨1∣.
 
 (* Z[A]^u X[B]^v.  A Pauli on A and a Pauli on B, so a kron — not the
    product of two same-qubit gates teleportation has.  They therefore
    commute, and no sign is picked up anywhere below. *)
 Definition ZX (u v : nat) : Square 4 :=
   (if Nat.eqb u 1%nat then σz else I 2) ⊗ (if Nat.eqb v 1%nat then σx else I 2).
-
-Definition EPR : Square 4 := ∣Φ+⟩ × ∣Φ+⟩†.
 
 Definition Corr (u v : nat) : Square 4 := (ZX u v)† × EPR × (ZX u v).
 
@@ -77,16 +62,12 @@ Proof.
 Qed.
 #[export] Hint Resolve WF_ZX : wf_db.
 
-Lemma WF_EPR : WF_Matrix EPR.
-Proof. unfold EPR; auto with wf_db. Qed.
 #[export] Hint Resolve WF_EPR : wf_db.
 
 Lemma WF_Corr : forall u v, WF_Matrix (Corr u v).
 Proof. intros u v; unfold Corr; auto with wf_db. Qed.
 #[export] Hint Resolve WF_Corr : wf_db.
 
-Lemma WF_Pi : forall b, WF_Matrix (Pi b).
-Proof. intros b; unfold Pi; destruct (Nat.eqb b 0%nat); auto with wf_db. Qed.
 #[export] Hint Resolve WF_Pi : wf_db.
 
 Lemma WF_Psi0 : WF_Matrix Psi0.
@@ -94,22 +75,6 @@ Proof. unfold Psi0; restore_dims; auto 10 with wf_db. Qed.
 #[export] Hint Resolve WF_Psi0 : wf_db.
 
 (* ---- The EPR projector on AB ---------------------------------------- *)
-
-(* ∣Φ+⟩ is a unit vector — proved once, in BellComplete. *)
-Lemma EPR_herm : EPR† = EPR.
-Proof. unfold EPR. rewrite Mmult_adjoint, adjoint_involutive. reflexivity. Qed.
-
-Lemma EPR_idem : EPR × EPR = EPR.
-Proof.
-  unfold EPR. rewrite Mmult_assoc, <- (Mmult_assoc (∣Φ+⟩†)), BellComplete.EPR_inner.
-  rewrite Mmult_1_l; auto with wf_db.
-Qed.
-
-Lemma EPR_fix : EPR × ∣Φ+⟩ = ∣Φ+⟩.
-Proof.
-  unfold EPR. rewrite Mmult_assoc, BellComplete.EPR_inner, Mmult_1_r;
-    auto with wf_db.
-Qed.
 
 Lemma ZX_unitary : forall u v, ZX u v × (ZX u v)† = I 4.
 Proof.
@@ -151,25 +116,6 @@ Proof. intros u v; unfold blk; restore_dims; auto with wf_db. Qed.
 Lemma WF_Sblk : WF_Matrix Sblk.
 Proof. unfold Sblk; auto with wf_db. Qed.
 #[export] Hint Resolve WF_Sblk : wf_db.
-
-(* The single-qubit projector algebra is BellComplete's. *)
-Lemma Pi_herm : forall b, (Pi b)† = Pi b.
-Proof.
-  intros b; unfold Pi; destruct (Nat.eqb b 0%nat);
-    [apply BellComplete.braket0_herm | apply BellComplete.braket1_herm].
-Qed.
-
-Lemma Pi_same : forall b, Pi b × Pi b = Pi b.
-Proof.
-  intros b; unfold Pi; destruct (Nat.eqb b 0%nat);
-    [apply BellComplete.braket00 | apply BellComplete.braket11].
-Qed.
-
-Lemma Pi_01 : Pi 0 × Pi 1 = Zero.
-Proof. unfold Pi; cbn; apply BellComplete.braket01. Qed.
-
-Lemma Pi_10 : Pi 1 × Pi 0 = Zero.
-Proof. unfold Pi; cbn; apply BellComplete.braket10. Qed.
 
 Lemma blk_mult : forall u v u' v',
     blk u v × blk u' v'
@@ -394,40 +340,6 @@ Qed.
     stays in the case study.                                            *)
 
 (* ---- Hermitian idempotents ------------------------------------------ *)
-
-Lemma lowner_refl : forall n (M : Square n), M ⊑ M.
-Proof.
-  intros n M. unfold lowner, positive_semidefinite. intros z Hz.
-  replace (M .+ (- C1) .* M) with (@Zero n n) by lma.
-  rewrite Mmult_0_r, Mmult_0_l. cbn. lra.
-Qed.
-
-Lemma herm_idem_psd : forall n (M : Square n),
-    M† = M -> M × M = M -> positive_semidefinite M.
-Proof.
-  intros n M Hh Hi.
-  assert (E : M = M × M†) by (rewrite Hh, Hi; reflexivity).
-  rewrite E at 1. apply positive_semidefinite_AAadjoint.
-Qed.
-
-(* I - M is again a hermitian idempotent — the half of "M is an effect"
-   that is not immediate. *)
-Lemma compl_herm : forall n (M : Square n),
-    M† = M -> (I n .+ (- C1) .* M)† = I n .+ (- C1) .* M.
-Proof.
-  intros n M Hh.
-  rewrite Mplus_adjoint, Mscale_adj, id_adjoint_eq, Hh.
-  assert (Hc : Cconj (- C1) = - C1) by lca. rewrite Hc. reflexivity.
-Qed.
-
-Lemma compl_idem : forall n (M : Square n),
-    WF_Matrix M -> M × M = M ->
-    (I n .+ (- C1) .* M) × (I n .+ (- C1) .* M) = I n .+ (- C1) .* M.
-Proof.
-  intros n M HW Hi.
-  rewrite Mmult_plus_distr_l, !Mmult_plus_distr_r.
-  Msimpl. rewrite Mscale_mult_dist_l, Mscale_mult_dist_r, Hi, Mscale_assoc. lma.
-Qed.
 
 (* ---- The padded AB operator every assertion here denotes ------------- *)
 

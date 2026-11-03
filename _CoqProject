@@ -47,6 +47,7 @@ Core/Soundness.v
 
 # --- Case studies ---
 CaseStudies/BellComplete.v
+CaseStudies/SharedKernel.v
 CaseStudies/Teleportation.v
 CaseStudies/SwapComplete.v
 CaseStudies/EntanglementSwapping.v

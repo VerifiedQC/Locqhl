@@ -15,6 +15,7 @@ From Stdlib Require Import Lists.List.
 From Stdlib Require Import Arith.PeanoNat.
 From Stdlib Require Import micromega.Lia.
 From QuantumLib Require Import Matrix Quantum Pad.
+From Locqhl.CaseStudies Require Import SharedKernel.
 Import ListNotations.
 
 Local Open Scope matrix_scope.
@@ -27,9 +28,6 @@ Definition At (i : nat) : nat := 4 * i + 2.
 Definition Bt (i : nat) : nat := 4 * i + 3.
 
 (** ** The block algebra — one round's four qubits ******************** *)
-
-Definition Pi (b : nat) : Square 2 :=
-  if Nat.eqb b 0%nat then ∣0⟩⟨0∣ else ∣1⟩⟨1∣.
 
 Definition Ev : Square 4 := ∣0⟩⟨0∣ ⊗ ∣0⟩⟨0∣ .+ ∣1⟩⟨1∣ ⊗ ∣1⟩⟨1∣.
 Definition Od : Square 4 := ∣0⟩⟨0∣ ⊗ ∣1⟩⟨1∣ .+ ∣1⟩⟨1∣ ⊗ ∣0⟩⟨0∣.
@@ -93,16 +91,10 @@ Definition inv_q (j k n : nat) : Square (2 ^ (4 * S n)) :=
 Definition s2 {m : nat} (A B : Square m) : Square (2 * m) :=
   Pi 0 ⊗ A .+ Pi 1 ⊗ B.
 
-Lemma WF_Pi : forall v, WF_Matrix (Pi v).
-Proof. intro v; unfold Pi; destruct (Nat.eqb v 0%nat); auto with wf_db. Qed.
 #[local] Hint Resolve WF_Pi : wf_db.
 
-Lemma Pi_herm : forall v, (Pi v) † = Pi v.
-Proof. intro v; unfold Pi; destruct (Nat.eqb v 0%nat); lma'. Qed.
 Lemma Pi_00 : Pi 0 × Pi 0 = Pi 0.  Proof. unfold Pi; cbn; lma'. Qed.
 Lemma Pi_11 : Pi 1 × Pi 1 = Pi 1.  Proof. unfold Pi; cbn; lma'. Qed.
-Lemma Pi_01 : Pi 0 × Pi 1 = Zero.  Proof. unfold Pi; cbn; lma'. Qed.
-Lemma Pi_10 : Pi 1 × Pi 0 = Zero.  Proof. unfold Pi; cbn; lma'. Qed.
 
 Lemma s2_mult : forall m (A B C D : Square m),
     @s2 m A B × @s2 m C D = @s2 m (A × C) (B × D).

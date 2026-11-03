@@ -529,10 +529,10 @@ Lemma herm_idem_effect : forall dim (M : Square (2 ^ dim)),
     WF_Matrix M -> M † = M -> M × M = M -> is_effect (dim := dim) M.
 Proof.
   intros dim M HW Hh Hi.
-  split; [ apply NonlocalCNOTComplete.herm_idem_psd; assumption |].
-  unfold lowner. apply NonlocalCNOTComplete.herm_idem_psd;
-    [ apply NonlocalCNOTComplete.compl_herm
-    | apply NonlocalCNOTComplete.compl_idem ]; assumption.
+  split; [ apply SharedKernel.herm_idem_psd; assumption |].
+  unfold lowner. apply SharedKernel.herm_idem_psd;
+    [ apply SharedKernel.compl_herm
+    | apply SharedKernel.compl_idem ]; assumption.
 Qed.
 
 (* Every constant assertion of this case study is a block operator padded
@@ -602,7 +602,7 @@ Definition four : list (qpred 6 * formula) :=
 (* Complete's WF hints are not in scope without [Import] — the same thing
    EntanglementSwapping.v has to do for SwapComplete. *)
 #[local] Hint Resolve NonlocalCNOTComplete.WF_CNOTChoi
-                      NonlocalCNOTComplete.WF_EPR
+                      SharedKernel.WF_EPR
                       NonlocalCNOTComplete.WF_Psi0
                       NonlocalCNOTComplete.WF_cnotBT_raw
                       NonlocalCNOTComplete.WF_hB_raw
